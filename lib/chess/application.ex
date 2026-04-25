@@ -9,14 +9,12 @@ defmodule Chess.Application do
   def start(_type, _args) do
     children = [
       ChessWeb.Telemetry,
-      Chess.Repo,
       {DNSCluster, query: Application.get_env(:chess, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: Chess.PubSub},
-      # Start the Finch HTTP client for sending emails
       {Finch, name: Chess.Finch},
-      # Start a worker by calling: Chess.Worker.start_link(arg)
-      # {Chess.Worker, arg},
-      # Start to serve requests, typically the last entry
+      Chess.Rooms,
+      {Registry, keys: :unique, name: Chess.GameRegistry},
+      {DynamicSupervisor, name: Chess.GameSupervisor, strategy: :one_for_one},
       ChessWeb.Endpoint
     ]
 

@@ -8,7 +8,6 @@
 import Config
 
 config :chess,
-  ecto_repos: [Chess.Repo],
   generators: [timestamp_type: :utc_datetime]
 
 # Configures the endpoint

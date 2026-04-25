@@ -10,28 +10,31 @@ defmodule ChessWeb.Router do
     plug :put_secure_browser_headers
   end
 
-  pipeline :api do
-    plug :accepts, ["json"]
+  pipeline :authenticated do
+    plug ChessWeb.Plugs.RequireNickname
   end
 
   scope "/", ChessWeb do
     pipe_through :browser
 
-    get "/", PageController, :home
+    live "/", LoginLive, :index
+    post "/session", SessionController, :create
+    delete "/session", SessionController, :delete
   end
 
-  # Other scopes may use custom stacks.
-  # scope "/api", ChessWeb do
-  #   pipe_through :api
-  # end
+  scope "/", ChessWeb do
+    pipe_through [:browser, :authenticated]
+
+    live_session :authenticated,
+      on_mount: [{ChessWeb.LiveAuth, :require_nickname}] do
+      live "/lobby", LobbyLive, :index
+      live "/games/solo", GameLive, :solo
+      live "/games/:room_id", GameLive, :show
+    end
+  end
 
   # Enable LiveDashboard and Swoosh mailbox preview in development
   if Application.compile_env(:chess, :dev_routes) do
-    # If you want to use the LiveDashboard in production, you should put
-    # it behind authentication and allow only admins to access it.
-    # If your application does not have an admins-only section yet,
-    # you can use Plug.BasicAuth to set up some basic authentication
-    # as long as you are also using SSL (which you should anyway).
     import Phoenix.LiveDashboard.Router
 
     scope "/dev" do

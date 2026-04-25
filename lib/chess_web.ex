@@ -89,6 +89,9 @@ defmodule ChessWeb do
       import Phoenix.HTML
       # Core UI components
       import ChessWeb.CoreComponents
+      # Themed Chess Club primitives
+      import ChessWeb.UiComponents
+      import ChessWeb.ChessComponents
 
       # Shortcut for generating JS commands
       alias Phoenix.LiveView.JS

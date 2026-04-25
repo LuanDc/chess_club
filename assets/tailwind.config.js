@@ -15,7 +15,46 @@ module.exports = {
     extend: {
       colors: {
         brand: "#FD4F00",
-      }
+        bg:        "#f6f3ed",
+        surface:   "#fdfbf7",
+        surface2:  "#f0ece3",
+        border:    "#ddd8cc",
+        border2:   "#ccc6b8",
+        text:      "#2c2820",
+        muted:     "#8a8070",
+        faint:     "#b0a898",
+        accent:    "#3d6b4f",
+        accent2:   "#2f5540",
+        warm:      "#8b5e3c",
+        warn:      "#b85c38",
+        board: {
+          light: "#f0d9b5",
+          dark:  "#b58863",
+        },
+      },
+      fontFamily: {
+        serif:   ['Lora', 'serif'],
+        display: ['"Cormorant Garamond"', 'serif'],
+      },
+      keyframes: {
+        fadeUp: {
+          "0%":   { opacity: 0, transform: "translateY(8px)" },
+          "100%": { opacity: 1, transform: "translateY(0)"   },
+        },
+        blinkPulse: {
+          "0%, 100%": { opacity: 1 },
+          "50%":      { opacity: .25 },
+        },
+        bob: {
+          "0%, 100%": { transform: "translateY(0)" },
+          "50%":      { transform: "translateY(-6px)" },
+        },
+      },
+      animation: {
+        "fade-up":    "fadeUp .35s ease both",
+        "blink":      "blinkPulse 2.2s ease-in-out infinite",
+        "bob":        "bob 2.5s ease-in-out infinite",
+      },
     },
   },
   plugins: [
