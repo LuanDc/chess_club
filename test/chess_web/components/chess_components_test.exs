@@ -8,7 +8,11 @@ defmodule ChessWeb.ChessComponentsTest do
 
   describe "navbar/1" do
     test "renders the Chess Club brand" do
-      html = render_component(&navbar/1, %{right: [%{__slot__: :right, inner_block: fn _, _ -> "" end}]})
+      html =
+        render_component(&navbar/1, %{
+          right: [%{__slot__: :right, inner_block: fn _, _ -> "" end}]
+        })
+
       assert html =~ "Chess Club"
       assert html =~ "♚"
     end

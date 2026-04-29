@@ -18,8 +18,7 @@ defmodule ChessWeb.UiComponents do
       "bg-transparent text-accent border border-accent/25 hover:bg-accent/10 px-6 py-3 text-[15px]",
     "danger" =>
       "bg-transparent text-warn border border-warn/30 hover:bg-warn/10 px-4 py-2 text-[13px]",
-    "solo" =>
-      "bg-surface2 text-warm border border-warm/25 hover:bg-warm/10 px-6 py-3 text-[15px]"
+    "solo" => "bg-surface2 text-warm border border-warm/25 hover:bg-warm/10 px-6 py-3 text-[15px]"
   }
 
   attr :variant, :string, default: "primary", values: Map.keys(@btn_variants)

@@ -94,7 +94,7 @@ defmodule Chess.GameServerTest do
     test "rejects move when game is over" do
       %{room_id: room_id} = start_game()
       {:ok, _} = Games.move(room_id, "Alice", "f2", "f3")
-      {:ok, _} = Games.move(room_id, "Bob",   "e7", "e5")
+      {:ok, _} = Games.move(room_id, "Bob", "e7", "e5")
       {:ok, _} = Games.move(room_id, "Alice", "g2", "g4")
       {:ok, state} = Games.move(room_id, "Bob", "d8", "h4")
       assert state.status == {:checkmate, :black_wins}

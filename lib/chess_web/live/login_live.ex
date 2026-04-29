@@ -29,9 +29,14 @@ defmodule ChessWeb.LoginLive do
 
     {error, valid?} =
       cond do
-        trimmed == "" -> {nil, false}
-        String.length(trimmed) < @min_length -> {"Use pelo menos #{@min_length} caracteres.", false}
-        true -> {nil, true}
+        trimmed == "" ->
+          {nil, false}
+
+        String.length(trimmed) < @min_length ->
+          {"Use pelo menos #{@min_length} caracteres.", false}
+
+        true ->
+          {nil, true}
       end
 
     {:noreply, assign(socket, nickname: nickname, error: error, valid?: valid?)}
