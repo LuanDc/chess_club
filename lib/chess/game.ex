@@ -1,5 +1,5 @@
 defmodule Chess.Game do
-  @moduledoc "Schema da entidade de estado de uma partida de xadrez."
+  @moduledoc "Game state schema."
 
   @enforce_keys [:room_id, :mode, :players]
   defstruct [

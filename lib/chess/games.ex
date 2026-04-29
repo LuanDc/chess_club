@@ -1,22 +1,22 @@
 defmodule Chess.Games do
   @moduledoc """
-  Contexto Phoenix para partidas de xadrez.
+  Phoenix context for chess games.
 
-  Funções puras de regra de negócio + API pública que delega ao
-  Chess.GamesServer para operações que envolvem processos.
+  Pure business rule functions + public API that delegates to
+  Chess.GamesServer for process-involving operations.
   """
 
   alias Chess.Game
   alias Chess.GamesServer
 
-  ## Construtor
+  ## Constructor
 
   @spec new(String.t(), :solo | :multiplayer, String.t(), String.t()) :: Game.t()
   def new(room_id, mode, white, black) do
     %Game{room_id: room_id, mode: mode, players: %{white: white, black: black}}
   end
 
-  ## Transições de estado (puras)
+  ## State transitions (pure)
 
   @spec apply_move(Game.t(), map(), term(), :white | :black) :: Game.t()
   def apply_move(%Game{} = game, move_record, new_status, next_side) do
@@ -47,7 +47,7 @@ defmodule Chess.Games do
     end
   end
 
-  ## Validações (puras)
+  ## Validations (pure)
 
   @spec ensure_in_progress(term()) :: :ok | {:error, :game_over}
   def ensure_in_progress(:in_progress), do: :ok
@@ -72,7 +72,7 @@ defmodule Chess.Games do
   def other_color(:white), do: :black
   def other_color(:black), do: :white
 
-  ## API pública (delega ao OTP layer)
+  ## Public API (delegates to the OTP layer)
 
   defdelegate start_game(opts), to: GamesServer
   defdelegate lookup(room_id), to: GamesServer
