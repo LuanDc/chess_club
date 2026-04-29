@@ -182,7 +182,7 @@ defmodule ChessWeb.GameLive do
   defp legal_targets_for(room_id, sq) do
     case Games.lookup(room_id) do
       {:ok, _pid} ->
-          Chess.Games.legal_moves_from(room_id, sq)
+        Chess.Games.legal_moves_from(room_id, sq)
 
       _ ->
         []

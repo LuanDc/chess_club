@@ -20,7 +20,12 @@ defmodule Chess.Games do
 
   @spec apply_move(Game.t(), map(), term(), :white | :black) :: Game.t()
   def apply_move(%Game{} = game, move_record, new_status, next_side) do
-    %Game{game | history: game.history ++ [move_record], status: new_status, side_to_move: next_side}
+    %Game{
+      game
+      | history: game.history ++ [move_record],
+        status: new_status,
+        side_to_move: next_side
+    }
   end
 
   @spec apply_solo_resign(Game.t()) :: Game.t()
