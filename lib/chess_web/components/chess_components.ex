@@ -168,7 +168,7 @@ defmodule ChessWeb.ChessComponents do
       |> assign_new(:files, fn -> file_order(assigns.orientation) end)
 
     ~H"""
-    <div class="grid grid-cols-8 grid-rows-8 select-none aspect-square w-full max-w-[480px] border border-border2 shadow-[0_4px_24px_rgba(44,40,32,.08)] rounded-sm overflow-hidden">
+    <div class="grid grid-cols-8 grid-rows-8 select-none aspect-square w-full border border-border2 shadow-[0_4px_24px_rgba(44,40,32,.08)] rounded-sm overflow-hidden">
       <%= for rank <- @ranks, file <- @files, sq = "#{<<file>>}#{rank}" do %>
         <button
           type="button"

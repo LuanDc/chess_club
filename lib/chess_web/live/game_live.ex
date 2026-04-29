@@ -228,8 +228,8 @@ defmodule ChessWeb.GameLive do
         </:right>
       </.navbar>
 
-      <div class="flex-1 flex items-start justify-center gap-7 p-5 flex-wrap">
-        <div class="flex flex-col w-full max-w-[480px] animate-fade-up">
+      <div class="flex-1 flex items-start justify-center gap-12 p-12 flex-row">
+        <div class="flex flex-col flex-1 animate-fade-up">
           <.player_bar
             position="top"
             name={top_name(@state, @my_color, @mode)}
@@ -254,7 +254,7 @@ defmodule ChessWeb.GameLive do
           />
         </div>
 
-        <div class="w-64 flex flex-col gap-3.5 pt-12 animate-fade-up">
+        <div class="w-64 flex flex-col gap-3.5 pt-0 animate-fade-up">
           <%= if game_over?(@state) do %>
             <.game_over_card message={game_over_message(@state, @nickname, @my_color, @mode)}>
               <.btn variant="primary" phx-click="back_to_lobby" class="w-full">
@@ -345,7 +345,12 @@ defmodule ChessWeb.GameLive do
   defp game_over_message(%{status: :ended}, _nick, _my_color, :solo),
     do: "Você encerrou a partida."
 
-  defp game_over_message(%{status: {:winner, winner_color, :resign}, players: players}, nick, _, _) do
+  defp game_over_message(
+         %{status: {:winner, winner_color, :resign}, players: players},
+         nick,
+         _,
+         _
+       ) do
     winner = Map.get(players, winner_color)
     loser = Map.get(players, other_color(winner_color))
 
