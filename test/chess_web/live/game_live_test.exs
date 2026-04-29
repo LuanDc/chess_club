@@ -158,6 +158,23 @@ defmodule ChessWeb.GameLiveTest do
       assert bob_html =~ "Você venceu"
     end
 
+    test "opponent sees game-over when player's LiveView dies (auto-resign)" do
+      Process.flag(:trap_exit, true)
+      room_id = start_multiplayer_game()
+      alice_conn = build_conn() |> Plug.Test.init_test_session(%{nickname: "Alice"})
+      bob_conn = build_conn() |> Plug.Test.init_test_session(%{nickname: "Bob"})
+
+      {:ok, alice_view, _} = live(alice_conn, ~p"/games/#{room_id}")
+      {:ok, bob_view, _} = live(bob_conn, ~p"/games/#{room_id}")
+
+      Process.exit(alice_view.pid, :kill)
+      Process.sleep(100)
+
+      bob_html = render(bob_view)
+      assert bob_html =~ "Alice desistiu"
+      assert bob_html =~ "Você venceu"
+    end
+
     test "'Voltar ao Lobby' navigates to /lobby", %{conn: conn} do
       room_id = start_multiplayer_game()
       {:ok, view, _} = live(conn, ~p"/games/#{room_id}")

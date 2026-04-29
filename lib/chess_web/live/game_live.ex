@@ -37,6 +37,7 @@ defmodule ChessWeb.GameLive do
   defp init_assigns(socket, room_id, mode) do
     if connected?(socket) do
       Phoenix.PubSub.subscribe(Chess.PubSub, "game:" <> room_id)
+      Games.join(room_id, self(), socket.assigns.nickname)
     end
 
     state = Games.get_state(room_id)

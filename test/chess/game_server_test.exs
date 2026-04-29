@@ -5,6 +5,8 @@ defmodule Chess.GameServerTest do
 
   defp unique_room_id, do: "T-#{System.unique_integer([:positive])}"
 
+  defp spawn_player, do: spawn(fn -> Process.sleep(:infinity) end)
+
   defp start_game(opts \\ []) do
     room_id = Keyword.get_lazy(opts, :room_id, &unique_room_id/0)
     white = Keyword.get(opts, :white, "Alice")
@@ -137,6 +139,79 @@ defmodule Chess.GameServerTest do
       %{room_id: room_id} = start_game(mode: :solo, white: "Alice", black: "Alice")
       assert {:ok, state} = Games.resign(room_id, "Alice")
       assert state.status == :ended
+    end
+  end
+
+  describe "auto-resign on disconnect" do
+    test "DOWN of multiplayer player triggers resign" do
+      %{room_id: room_id} = start_game()
+      pid = spawn_player()
+      :ok = Games.join(room_id, pid, "Alice")
+
+      Process.exit(pid, :kill)
+      assert_receive {:game_state, %{status: {:winner, :black, :resign}}}, 200
+    end
+
+    test "reconnect within grace cancels auto-resign" do
+      previous = Application.get_env(:chess, :resign_grace_ms)
+      Application.put_env(:chess, :resign_grace_ms, 100)
+      on_exit(fn -> Application.put_env(:chess, :resign_grace_ms, previous) end)
+
+      %{room_id: room_id} = start_game()
+      pid1 = spawn_player()
+      :ok = Games.join(room_id, pid1, "Alice")
+
+      Process.exit(pid1, :kill)
+      Process.sleep(20)
+
+      pid2 = spawn_player()
+      :ok = Games.join(room_id, pid2, "Alice")
+
+      refute_receive {:game_state, %{status: {:winner, _, _}}}, 200
+    end
+
+    test "DOWN of solo player does not resign" do
+      %{room_id: room_id} = start_game(mode: :solo, white: "Alice", black: "Alice")
+      pid = spawn_player()
+      :ok = Games.join(room_id, pid, "Alice")
+
+      Process.exit(pid, :kill)
+      refute_receive {:game_state, _}, 50
+    end
+
+    test "DOWN of one tab when player has two does not resign" do
+      %{room_id: room_id} = start_game()
+      pid1 = spawn_player()
+      pid2 = spawn_player()
+      :ok = Games.join(room_id, pid1, "Alice")
+      :ok = Games.join(room_id, pid2, "Alice")
+
+      Process.exit(pid1, :kill)
+      refute_receive {:game_state, _}, 50
+
+      Process.exit(pid2, :kill)
+      assert_receive {:game_state, %{status: {:winner, :black, :resign}}}, 200
+    end
+
+    test "DOWN of non-player pid is ignored" do
+      %{room_id: room_id} = start_game()
+      pid = spawn_player()
+      :ok = Games.join(room_id, pid, "Mallory")
+
+      Process.exit(pid, :kill)
+      refute_receive {:game_state, _}, 50
+    end
+
+    test "DOWN after manual resign is no-op" do
+      %{room_id: room_id} = start_game()
+      pid = spawn_player()
+      :ok = Games.join(room_id, pid, "Alice")
+
+      {:ok, _} = Games.resign(room_id, "Alice")
+      assert_receive {:game_state, %{status: {:winner, :black, :resign}}}
+
+      Process.exit(pid, :kill)
+      refute_receive {:game_state, _}, 50
     end
   end
 end

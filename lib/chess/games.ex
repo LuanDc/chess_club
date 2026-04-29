@@ -35,6 +35,8 @@ defmodule Chess.Games do
 
   def resign(room_id, nickname), do: GameServer.resign(room_id, nickname)
 
+  def join(room_id, pid, nickname), do: GameServer.join(room_id, pid, nickname)
+
   def stop(room_id) do
     case lookup(room_id) do
       {:ok, pid} -> DynamicSupervisor.terminate_child(@supervisor, pid)

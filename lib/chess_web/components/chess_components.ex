@@ -255,18 +255,14 @@ defmodule ChessWeb.ChessComponents do
             "px-1 py-px rounded",
             w && n == @last_n && @last_color == :white && "bg-accent/[.08] text-accent font-semibold"
           ]}
-        >
-          {if w, do: format_move(w), else: ""}
-        </span>
+        >{if w, do: format_move(w), else: ""}</span>
         <span
           data-latest={if b && n == @last_n && @last_color == :black, do: "true"}
           class={[
             "px-1 py-px rounded",
             b && n == @last_n && @last_color == :black && "bg-accent/[.08] text-accent font-semibold"
           ]}
-        >
-          {if b, do: format_move(b), else: ""}
-        </span>
+        >{if b, do: format_move(b), else: ""}</span>
       </div>
     </div>
     """

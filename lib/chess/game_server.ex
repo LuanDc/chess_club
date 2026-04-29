@@ -23,7 +23,9 @@ defmodule Chess.GameServer do
       side_to_move: :white,
       status: :in_progress,
       history: [],
-      started_at: nil
+      started_at: nil,
+      connections: %{},
+      pending_resigns: %{}
     ]
   end
 
@@ -43,6 +45,9 @@ defmodule Chess.GameServer do
 
   def resign(room_id, nickname),
     do: GenServer.call(via(room_id), {:resign, nickname})
+
+  def join(room_id, pid, nickname),
+    do: GenServer.call(via(room_id), {:join, pid, nickname})
 
   def stop(room_id), do: GenServer.stop(via(room_id))
 
@@ -111,16 +116,57 @@ defmodule Chess.GameServer do
   end
 
   def handle_call({:resign, nickname}, _from, state) do
-    with :ok <- ensure_in_progress(state),
-         {:ok, color} <- color_for(state, nickname) do
-      winner = other_color(color)
-      :ok = Game.set_winner(state.game_pid, winner, :resign)
-      new_status = {:winner, winner, :resign}
-      new_state = %State{state | status: new_status}
-      broadcast(new_state)
-      {:reply, {:ok, public_state(new_state)}, new_state}
-    else
-      err -> {:reply, err, state}
+    case do_multiplayer_resign(state, nickname) do
+      {:ok, new_state} -> {:reply, {:ok, public_state(new_state)}, new_state}
+      {:error, _} = err -> {:reply, err, state}
+    end
+  end
+
+  def handle_call({:join, pid, nickname}, _from, state) do
+    case color_for(state, nickname) do
+      {:error, :not_a_player} ->
+        {:reply, :ok, state}
+
+      {:ok, _color} ->
+        new_state =
+          state
+          |> register_connection(pid, nickname)
+          |> cancel_pending_resign(nickname)
+
+        {:reply, :ok, new_state}
+    end
+  end
+
+  @impl true
+  def handle_info({:DOWN, _ref, :process, pid, _reason}, state) do
+    case Map.pop(state.connections, pid) do
+      {nil, _} ->
+        {:noreply, state}
+
+      {{nickname, _ref}, remaining} ->
+        new_state = %State{state | connections: remaining}
+        {:noreply, maybe_schedule_auto_resign(new_state, nickname)}
+    end
+  end
+
+  def handle_info({:auto_resign, nickname}, state) do
+    new_state = %State{state | pending_resigns: Map.delete(state.pending_resigns, nickname)}
+
+    cond do
+      new_state.status != :in_progress ->
+        {:noreply, new_state}
+
+      new_state.mode == :solo ->
+        {:noreply, new_state}
+
+      reconnected?(new_state, nickname) ->
+        {:noreply, new_state}
+
+      true ->
+        case do_multiplayer_resign(new_state, nickname) do
+          {:ok, resigned_state} -> {:noreply, resigned_state}
+          {:error, _} -> {:noreply, new_state}
+        end
     end
   end
 
@@ -169,4 +215,61 @@ defmodule Chess.GameServer do
 
   defp other_color(:white), do: :black
   defp other_color(:black), do: :white
+
+  defp do_multiplayer_resign(%State{mode: :solo}, _nickname), do: {:error, :solo_mode}
+
+  defp do_multiplayer_resign(state, nickname) do
+    with :ok <- ensure_in_progress(state),
+         {:ok, color} <- color_for(state, nickname) do
+      winner = other_color(color)
+      :ok = Game.set_winner(state.game_pid, winner, :resign)
+      new_state = %State{state | status: {:winner, winner, :resign}}
+      broadcast(new_state)
+      {:ok, new_state}
+    end
+  end
+
+  defp register_connection(state, pid, nickname) do
+    if Map.has_key?(state.connections, pid) do
+      state
+    else
+      ref = Process.monitor(pid)
+      %State{state | connections: Map.put(state.connections, pid, {nickname, ref})}
+    end
+  end
+
+  defp cancel_pending_resign(state, nickname) do
+    case Map.pop(state.pending_resigns, nickname) do
+      {nil, _} ->
+        state
+
+      {timer_ref, remaining} ->
+        Process.cancel_timer(timer_ref)
+        %State{state | pending_resigns: remaining}
+    end
+  end
+
+  defp maybe_schedule_auto_resign(%State{mode: :solo} = state, _nickname), do: state
+
+  defp maybe_schedule_auto_resign(%State{status: status} = state, _nickname)
+       when status != :in_progress,
+       do: state
+
+  defp maybe_schedule_auto_resign(state, nickname) do
+    if has_other_connection?(state, nickname) do
+      state
+    else
+      state = cancel_pending_resign(state, nickname)
+      timer_ref = Process.send_after(self(), {:auto_resign, nickname}, grace_ms())
+      %State{state | pending_resigns: Map.put(state.pending_resigns, nickname, timer_ref)}
+    end
+  end
+
+  defp reconnected?(state, nickname), do: has_other_connection?(state, nickname)
+
+  defp has_other_connection?(state, nickname) do
+    Enum.any?(state.connections, fn {_pid, {nick, _ref}} -> nick == nickname end)
+  end
+
+  defp grace_ms, do: Application.get_env(:chess, :resign_grace_ms, 30_000)
 end
