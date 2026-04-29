@@ -1,6 +1,6 @@
 defmodule Chess.GameServer do
   @moduledoc """
-  GenServer that owns a single live chess game. Wraps `Chess.Game`,
+  GenServer that owns a single live chess game. Wraps `Chess.GameEngine`,
   enforces turn order, tracks history, and broadcasts every state
   change on `"game:<room_id>"` via `Chess.PubSub`.
 
@@ -10,19 +10,16 @@ defmodule Chess.GameServer do
   use GenServer, restart: :transient
 
   alias Chess.Game
+  alias Chess.GameEngine
+  alias Chess.Games
 
   @pubsub Chess.PubSub
 
   defmodule State do
-    @enforce_keys [:room_id, :mode, :players, :game_pid]
+    @enforce_keys [:game, :game_pid]
     defstruct [
-      :room_id,
-      :mode,
-      :players,
+      :game,
       :game_pid,
-      side_to_move: :white,
-      status: :in_progress,
-      history: [],
       started_at: nil,
       connections: %{},
       pending_resigns: %{}
@@ -57,16 +54,11 @@ defmodule Chess.GameServer do
 
   @impl true
   def init(%{room_id: room_id, mode: mode, white: white, black: black}) do
-    {:ok, game_pid} = Game.new()
+    {:ok, game_pid} = GameEngine.new()
 
     state = %State{
-      room_id: room_id,
-      mode: mode,
-      players: %{white: white, black: black},
+      game: Games.new(room_id, mode, white, black),
       game_pid: game_pid,
-      side_to_move: :white,
-      status: :in_progress,
-      history: [],
       started_at: System.system_time(:second)
     }
 
@@ -79,24 +71,22 @@ defmodule Chess.GameServer do
   end
 
   def handle_call({:legal_moves_from, square}, _from, state) do
-    {:reply, Game.legal_moves_from(state.game_pid, square), state}
+    {:reply, GameEngine.legal_moves_from(state.game_pid, square), state}
   end
 
   def handle_call({:move, nickname, from, to, promo}, _from, state) do
-    with :ok <- ensure_in_progress(state),
-         {:ok, _color} <- color_for(state, nickname),
-         :ok <- ensure_turn_for(state, nickname),
-         {:ok, status} <- Game.move(state.game_pid, from, to, promo) do
-      played_color = state.side_to_move
-      move_record = %{from: from, to: to, color: played_color, promotion: promo}
+    g = state.game
 
-      new_state = %State{
-        state
-        | history: state.history ++ [move_record],
-          status: status,
-          side_to_move: Game.side_to_move(state.game_pid)
-      }
+    with :ok <- Games.ensure_in_progress(g.status),
+         {:ok, _color} <- Games.color_for(g.mode, g.players, nickname),
+         :ok <- Games.ensure_turn_for(g.mode, g.players, g.side_to_move, nickname),
+         {:ok, new_status} <- GameEngine.move(state.game_pid, from, to, promo) do
+      move_record = %{from: from, to: to, color: g.side_to_move, promotion: promo}
 
+      new_game =
+        Games.apply_move(g, move_record, new_status, GameEngine.side_to_move(state.game_pid))
+
+      new_state = %State{state | game: new_game}
       broadcast(new_state)
       {:reply, {:ok, public_state(new_state)}, new_state}
     else
@@ -104,10 +94,12 @@ defmodule Chess.GameServer do
     end
   end
 
-  def handle_call({:resign, nickname}, _from, %State{mode: :solo} = state) do
-    with :ok <- ensure_in_progress(state),
-         {:ok, _color} <- color_for(state, nickname) do
-      new_state = %State{state | status: :ended}
+  def handle_call({:resign, nickname}, _from, %State{game: %Game{mode: :solo}} = state) do
+    g = state.game
+
+    with :ok <- Games.ensure_in_progress(g.status),
+         {:ok, _color} <- Games.color_for(g.mode, g.players, nickname) do
+      new_state = %State{state | game: Games.apply_solo_resign(g)}
       broadcast(new_state)
       {:reply, {:ok, public_state(new_state)}, new_state}
     else
@@ -123,7 +115,7 @@ defmodule Chess.GameServer do
   end
 
   def handle_call({:join, pid, nickname}, _from, state) do
-    case color_for(state, nickname) do
+    case Games.color_for(state.game.mode, state.game.players, nickname) do
       {:error, :not_a_player} ->
         {:reply, :ok, state}
 
@@ -151,12 +143,13 @@ defmodule Chess.GameServer do
 
   def handle_info({:auto_resign, nickname}, state) do
     new_state = %State{state | pending_resigns: Map.delete(state.pending_resigns, nickname)}
+    g = new_state.game
 
     cond do
-      new_state.status != :in_progress ->
+      g.status != :in_progress ->
         {:noreply, new_state}
 
-      new_state.mode == :solo ->
+      g.mode == :solo ->
         {:noreply, new_state}
 
       reconnected?(new_state, nickname) ->
@@ -172,60 +165,38 @@ defmodule Chess.GameServer do
 
   @impl true
   def terminate(_reason, %State{game_pid: pid}) do
-    Game.stop(pid)
+    GameEngine.stop(pid)
     :ok
   end
 
   ## Helpers
 
-  defp public_state(%State{} = s) do
+  defp public_state(%State{game: g, game_pid: game_pid}) do
     %{
-      room_id: s.room_id,
-      mode: s.mode,
-      players: s.players,
-      side_to_move: s.side_to_move,
-      status: s.status,
-      history: s.history,
-      fen: Game.fen(s.game_pid)
+      room_id: g.room_id,
+      mode: g.mode,
+      players: g.players,
+      side_to_move: g.side_to_move,
+      status: g.status,
+      history: g.history,
+      fen: GameEngine.fen(game_pid)
     }
   end
 
-  defp broadcast(%State{room_id: room_id} = s) do
-    Phoenix.PubSub.broadcast(@pubsub, "game:" <> room_id, {:game_state, public_state(s)})
+  defp broadcast(%State{game: %Game{room_id: room_id}} = state) do
+    Phoenix.PubSub.broadcast(@pubsub, "game:" <> room_id, {:game_state, public_state(state)})
   end
-
-  defp ensure_in_progress(%State{status: :in_progress}), do: :ok
-  defp ensure_in_progress(_), do: {:error, :game_over}
-
-  defp color_for(%State{mode: :solo, players: %{white: nick}}, nick), do: {:ok, :solo}
-
-  defp color_for(%State{players: %{white: nick}}, nick), do: {:ok, :white}
-  defp color_for(%State{players: %{black: nick}}, nick), do: {:ok, :black}
-  defp color_for(_, _), do: {:error, :not_a_player}
-
-  defp ensure_turn_for(%State{mode: :solo}, _nickname), do: :ok
-
-  defp ensure_turn_for(%State{side_to_move: side_color, players: players}, nickname) do
-    if Map.get(players, side_color) == nickname do
-      :ok
-    else
-      {:error, :not_your_turn}
-    end
-  end
-
-  defp other_color(:white), do: :black
-  defp other_color(:black), do: :white
-
-  defp do_multiplayer_resign(%State{mode: :solo}, _nickname), do: {:error, :solo_mode}
 
   defp do_multiplayer_resign(state, nickname) do
-    with :ok <- ensure_in_progress(state),
-         {:ok, color} <- color_for(state, nickname) do
-      winner = other_color(color)
-      :ok = Game.set_winner(state.game_pid, winner, :resign)
-      new_state = %State{state | status: {:winner, winner, :resign}}
-      broadcast(new_state)
-      {:ok, new_state}
+    case Games.apply_multiplayer_resign(state.game, nickname) do
+      {:ok, new_game, winner} ->
+        :ok = GameEngine.set_winner(state.game_pid, winner, :resign)
+        new_state = %State{state | game: new_game}
+        broadcast(new_state)
+        {:ok, new_state}
+
+      {:error, _} = err ->
+        err
     end
   end
 
@@ -249,9 +220,9 @@ defmodule Chess.GameServer do
     end
   end
 
-  defp maybe_schedule_auto_resign(%State{mode: :solo} = state, _nickname), do: state
+  defp maybe_schedule_auto_resign(%State{game: %Game{mode: :solo}} = state, _nickname), do: state
 
-  defp maybe_schedule_auto_resign(%State{status: status} = state, _nickname)
+  defp maybe_schedule_auto_resign(%State{game: %Game{status: status}} = state, _nickname)
        when status != :in_progress,
        do: state
 
