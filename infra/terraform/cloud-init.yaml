@@ -1,0 +1,78 @@
+#cloud-config
+
+# Create the deploy user used to run the application
+users:
+  - default
+  - name: deploy
+    groups: [sudo]
+    shell: /bin/bash
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    lock_passwd: true
+
+# Disable password-based SSH authentication
+write_files:
+  - path: /etc/ssh/sshd_config.d/99-hardening.conf
+    owner: root:root
+    permissions: "0644"
+    content: |
+      PasswordAuthentication no
+      ChallengeResponseAuthentication no
+      PermitRootLogin no
+
+  # Pinned ASDF versions — both must agree with DeployEx (Task 05)
+  - path: /home/deploy/.tool-versions
+    owner: deploy:deploy
+    permissions: "0644"
+    content: |
+      erlang ${erlang_version}
+      elixir ${elixir_version}
+
+# Install build dependencies required by asdf-erlang to compile OTP from source
+packages:
+  - git
+  - curl
+  - build-essential
+  - autoconf
+  - m4
+  - libncurses5-dev
+  - libssl-dev
+  - libssh-dev
+  - unixodbc-dev
+  - xsltproc
+  - fop
+  - libxml2-utils
+  - libncurses-dev
+
+package_update: true
+package_upgrade: true
+
+runcmd:
+  # Apply SSH hardening immediately
+  - systemctl restart ssh
+
+  # Install ASDF for the deploy user
+  - su - deploy -c 'git clone https://github.com/asdf-vm/asdf.git ~/.asdf --branch v0.14.0'
+  - su - deploy -c 'echo ". \"$HOME/.asdf/asdf.sh\""           >> ~/.bashrc'
+  - su - deploy -c 'echo ". \"$HOME/.asdf/completions/asdf.bash\"" >> ~/.bashrc'
+
+  # Install ASDF plugins
+  - su - deploy -c '. ~/.asdf/asdf.sh && asdf plugin add erlang https://github.com/asdf-vm/asdf-erlang.git'
+  - su - deploy -c '. ~/.asdf/asdf.sh && asdf plugin add elixir https://github.com/asdf-vm/asdf-elixir.git'
+
+  # Build OTP from source (skipping wx/observer/debugger to reduce build time)
+  - >
+    su - deploy -c '
+      export KERL_CONFIGURE_OPTIONS="--without-javac --without-wx --without-debugger --without-observer --without-et";
+      . ~/.asdf/asdf.sh && asdf install erlang ${erlang_version}
+    '
+
+  # Install Elixir (uses precompiled binaries from GitHub releases)
+  - su - deploy -c '. ~/.asdf/asdf.sh && asdf install elixir ${elixir_version}'
+
+  # Set global defaults so iex/elixir work from any directory
+  - su - deploy -c '. ~/.asdf/asdf.sh && asdf global erlang ${erlang_version}'
+  - su - deploy -c '. ~/.asdf/asdf.sh && asdf global elixir ${elixir_version}'
+
+  # Write a marker file so you can verify cloud-init completed successfully
+  - su - deploy -c '. ~/.asdf/asdf.sh && iex --version > /home/deploy/version-check.txt 2>&1'
+  - su - deploy -c '. ~/.asdf/asdf.sh && elixir --version >> /home/deploy/version-check.txt 2>&1'
