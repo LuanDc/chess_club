@@ -23,14 +23,16 @@ defmodule Chess.GameServerTest do
 
     Phoenix.PubSub.subscribe(Chess.PubSub, "game:#{room_id}")
 
-    on_exit(fn ->
-      case Games.lookup(room_id) do
-        {:ok, pid} -> if Process.alive?(pid), do: GenServer.stop(pid)
-        _ -> :ok
-      end
-    end)
+    on_exit(fn -> cleanup_game(room_id) end)
 
     %{room_id: room_id, white: white, black: black}
+  end
+
+  defp cleanup_game(room_id) do
+    case Games.lookup(room_id) do
+      {:ok, pid} -> if Process.alive?(pid), do: GenServer.stop(pid)
+      _ -> :ok
+    end
   end
 
   describe "start_game/1" do

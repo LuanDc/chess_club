@@ -75,22 +75,29 @@ defmodule ChessWeb.GameLive do
     |> Enum.with_index()
     |> Enum.reduce(%{}, fn {row, idx}, acc ->
       rank = 8 - idx
-
-      row
-      |> String.graphemes()
-      |> Enum.reduce({?a, acc}, fn ch, {file, acc2} ->
-        case Integer.parse(ch) do
-          {n, ""} ->
-            {file + n, acc2}
-
-          :error ->
-            piece = decode_piece(ch)
-            sq = <<file>> <> Integer.to_string(rank)
-            {file + 1, Map.put(acc2, sq, piece)}
-        end
-      end)
-      |> elem(1)
+      process_row(row, rank, acc)
     end)
+  end
+
+  defp process_row(row, rank, acc) do
+    row
+    |> String.graphemes()
+    |> Enum.reduce({?a, acc}, fn ch, {file, acc2} ->
+      process_char(ch, file, rank, acc2)
+    end)
+    |> elem(1)
+  end
+
+  defp process_char(ch, file, rank, acc) do
+    case Integer.parse(ch) do
+      {n, ""} ->
+        {file + n, acc}
+
+      :error ->
+        piece = decode_piece(ch)
+        sq = <<file>> <> Integer.to_string(rank)
+        {file + 1, Map.put(acc, sq, piece)}
+    end
   end
 
   defp decode_piece(c) do

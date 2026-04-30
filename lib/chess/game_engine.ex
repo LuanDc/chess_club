@@ -155,6 +155,4 @@ defmodule Chess.GameEngine do
   defp normalize_status({:checkmate, who}), do: {:checkmate, who}
   defp normalize_status({:draw, why}), do: {:draw, why}
   defp normalize_status({:winner, winner, {:manual, why}}), do: {:winner, winner, why}
-  defp normalize_status({:winner, winner, why}), do: {:winner, winner, why}
-  defp normalize_status(other), do: other
 end

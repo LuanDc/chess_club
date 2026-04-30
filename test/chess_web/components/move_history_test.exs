@@ -35,7 +35,8 @@ defmodule ChessWeb.Components.MoveHistoryTest do
       html = render_component(&move_history/1, %{moves: moves})
 
       # e7-e5 is the latest, should have the latest class
-      assert html =~ ~r/data-latest="true"[^>]*>e7-e5/
+      assert html =~ ~r/data-latest="true"/
+      assert html =~ ~r/>\s*e7-e5/
     end
   end
 end

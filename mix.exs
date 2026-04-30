@@ -81,7 +81,8 @@ defmodule Chess.MixProject do
         "tailwind chess --minify",
         "esbuild chess --minify",
         "phx.digest"
-      ]
+      ],
+      quality: ["credo --strict", "dialyzer", "cmd MIX_ENV=test mix test"]
     ]
   end
 end
