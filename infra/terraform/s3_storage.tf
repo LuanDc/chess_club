@@ -116,36 +116,3 @@ resource "aws_iam_access_key" "github_actions" {
 
 # Data source for current AWS account ID
 data "aws_caller_identity" "current" {}
-
-# Outputs
-output "s3_bucket_name" {
-  value       = aws_s3_bucket.chess_releases.id
-  description = "Name of the S3 bucket"
-}
-
-output "s3_bucket_region" {
-  value       = aws_s3_bucket.chess_releases.region
-  description = "AWS region of the S3 bucket"
-}
-
-output "s3_bucket_url" {
-  value       = "https://${aws_s3_bucket.chess_releases.id}.s3.${aws_s3_bucket.chess_releases.region}.amazonaws.com/"
-  description = "Base URL for S3 bucket objects"
-}
-
-output "ec2_instance_profile_name" {
-  value       = aws_iam_instance_profile.ec2_chess_profile.name
-  description = "Instance Profile name for EC2"
-}
-
-output "github_actions_access_key_id" {
-  value       = aws_iam_access_key.github_actions.id
-  sensitive   = true
-  description = "AWS Access Key ID for GitHub Actions"
-}
-
-output "github_actions_secret_access_key" {
-  value       = aws_iam_access_key.github_actions.secret
-  sensitive   = true
-  description = "AWS Secret Access Key for GitHub Actions"
-}
