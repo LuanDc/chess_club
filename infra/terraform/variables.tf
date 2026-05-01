@@ -1,31 +1,7 @@
-variable "tenancy_ocid" {
-  description = "OCID of the OCI tenancy"
+variable "aws_region" {
+  description = "AWS region to deploy resources (e.g. us-east-1, sa-east-1)"
   type        = string
-}
-
-variable "user_ocid" {
-  description = "OCID of the OCI user"
-  type        = string
-}
-
-variable "fingerprint" {
-  description = "Fingerprint of the OCI API signing key"
-  type        = string
-}
-
-variable "private_key_path" {
-  description = "Path to the OCI API private key file"
-  type        = string
-}
-
-variable "region" {
-  description = "OCI region (e.g. us-ashburn-1, sa-saopaulo-1)"
-  type        = string
-}
-
-variable "compartment_ocid" {
-  description = "OCID of the compartment to deploy resources into (use tenancy OCID for root)"
-  type        = string
+  default     = "us-east-1"
 }
 
 variable "ssh_public_key" {
@@ -33,14 +9,8 @@ variable "ssh_public_key" {
   type        = string
 }
 
-variable "availability_domain_index" {
-  description = "Zero-based index of the availability domain to use (0 = AD-1)"
-  type        = number
-  default     = 0
-}
-
-variable "vcn_cidr" {
-  description = "CIDR block for the Virtual Cloud Network"
+variable "vpc_cidr" {
+  description = "CIDR block for the VPC"
   type        = string
   default     = "10.0.0.0/16"
 }
@@ -51,22 +21,16 @@ variable "subnet_cidr" {
   default     = "10.0.1.0/24"
 }
 
-variable "instance_ocpus" {
-  description = "Number of OCPUs for the A1 Flex instance (Always Free limit: 4 total)"
-  type        = number
-  default     = 2
+variable "instance_type" {
+  description = "EC2 instance type (e.g. t3.small, t3.medium)"
+  type        = string
+  default     = "t3.small"
 }
 
-variable "instance_memory_gb" {
-  description = "RAM in GB for the A1 Flex instance (Always Free limit: 24 GB total)"
+variable "root_volume_size_gb" {
+  description = "Root EBS volume size in GB"
   type        = number
-  default     = 4
-}
-
-variable "boot_volume_size_gb" {
-  description = "Boot volume size in GB"
-  type        = number
-  default     = 50
+  default     = 20
 }
 
 variable "erlang_version" {

@@ -1,83 +1,86 @@
-resource "oci_core_vcn" "chess" {
-  compartment_id = var.compartment_ocid
-  cidr_blocks    = [var.vcn_cidr]
-  display_name   = "chess-vcn"
-  dns_label      = "chessvn"
-}
+resource "aws_vpc" "chess" {
+  cidr_block           = var.vpc_cidr
+  enable_dns_hostnames = true
+  enable_dns_support   = true
 
-resource "oci_core_internet_gateway" "chess" {
-  compartment_id = var.compartment_ocid
-  vcn_id         = oci_core_vcn.chess.id
-  display_name   = "chess-igw"
-  enabled        = true
-}
-
-resource "oci_core_route_table" "chess" {
-  compartment_id = var.compartment_ocid
-  vcn_id         = oci_core_vcn.chess.id
-  display_name   = "chess-rt"
-
-  route_rules {
-    destination       = "0.0.0.0/0"
-    destination_type  = "CIDR_BLOCK"
-    network_entity_id = oci_core_internet_gateway.chess.id
+  tags = {
+    Name = "chess-vpc"
   }
 }
 
-resource "oci_core_security_list" "chess" {
-  compartment_id = var.compartment_ocid
-  vcn_id         = oci_core_vcn.chess.id
-  display_name   = "chess-sl"
+resource "aws_internet_gateway" "chess" {
+  vpc_id = aws_vpc.chess.id
 
-  egress_security_rules {
-    destination = "0.0.0.0/0"
-    protocol    = "all"
-    stateless   = false
-  }
-
-  # SSH
-  ingress_security_rules {
-    protocol  = "6"
-    source    = "0.0.0.0/0"
-    stateless = false
-
-    tcp_options {
-      min = 22
-      max = 22
-    }
-  }
-
-  # HTTP
-  ingress_security_rules {
-    protocol  = "6"
-    source    = "0.0.0.0/0"
-    stateless = false
-
-    tcp_options {
-      min = 80
-      max = 80
-    }
-  }
-
-  # HTTPS
-  ingress_security_rules {
-    protocol  = "6"
-    source    = "0.0.0.0/0"
-    stateless = false
-
-    tcp_options {
-      min = 443
-      max = 443
-    }
+  tags = {
+    Name = "chess-igw"
   }
 }
 
-resource "oci_core_subnet" "chess_public" {
-  compartment_id    = var.compartment_ocid
-  vcn_id            = oci_core_vcn.chess.id
-  cidr_block        = var.subnet_cidr
-  display_name      = "chess-public-subnet"
-  dns_label         = "chesspub"
-  route_table_id    = oci_core_route_table.chess.id
-  security_list_ids = [oci_core_security_list.chess.id]
+resource "aws_route_table" "chess_public" {
+  vpc_id = aws_vpc.chess.id
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.chess.id
+  }
+
+  tags = {
+    Name = "chess-rt-public"
+  }
+}
+
+resource "aws_route_table_association" "chess_public" {
+  subnet_id      = aws_subnet.chess_public.id
+  route_table_id = aws_route_table.chess_public.id
+}
+
+resource "aws_subnet" "chess_public" {
+  vpc_id                  = aws_vpc.chess.id
+  cidr_block              = var.subnet_cidr
+  map_public_ip_on_launch = true
+
+  tags = {
+    Name = "chess-public-subnet"
+  }
+}
+
+resource "aws_security_group" "chess" {
+  name        = "chess-sg"
+  description = "Security group for chess server"
+  vpc_id      = aws_vpc.chess.id
+
+  ingress {
+    description = "SSH"
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    description = "HTTP"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    description = "HTTPS"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "chess-sg"
+  }
 }

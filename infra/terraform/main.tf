@@ -1,38 +1,30 @@
 terraform {
   required_providers {
-    oci = {
-      source  = "oracle/oci"
-      version = "~> 6.0"
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
     }
   }
   required_version = ">= 1.6"
 }
 
-provider "oci" {
-  tenancy_ocid     = var.tenancy_ocid
-  user_ocid        = var.user_ocid
-  fingerprint      = var.fingerprint
-  private_key_path = var.private_key_path
-  region           = var.region
+provider "aws" {
+  region = var.aws_region
 }
 
-data "oci_identity_availability_domains" "ads" {
-  compartment_id = var.tenancy_ocid
-}
+data "aws_ami" "ubuntu_22_04" {
+  most_recent = true
+  owners      = ["099720109477"] # Canonical
 
-locals {
-  availability_domain = data.oci_identity_availability_domains.ads.availability_domains[var.availability_domain_index].name
-}
+  filter {
+    name   = "name"
+    values = ["ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*"]
+  }
 
-# Resolve the latest Ubuntu 22.04 ARM64 image available for A1 Flex in this region
-data "oci_core_images" "ubuntu_22_04_arm64" {
-  compartment_id           = var.compartment_ocid
-  operating_system         = "Canonical Ubuntu"
-  operating_system_version = "22.04"
-  shape                    = "VM.Standard.A1.Flex"
-  sort_by                  = "TIMECREATED"
-  sort_order               = "DESC"
-  state                    = "AVAILABLE"
+  filter {
+    name   = "virtualization-type"
+    values = ["hvm"]
+  }
 }
 
 data "cloudinit_config" "chess_server" {
@@ -49,37 +41,31 @@ data "cloudinit_config" "chess_server" {
   }
 }
 
-resource "oci_core_instance" "chess_server" {
-  compartment_id      = var.compartment_ocid
-  availability_domain = local.availability_domain
-  display_name        = "chess-server"
-  shape               = "VM.Standard.A1.Flex"
+resource "aws_key_pair" "chess" {
+  key_name   = "chess-deploy"
+  public_key = var.ssh_public_key
+}
 
-  shape_config {
-    ocpus         = var.instance_ocpus
-    memory_in_gbs = var.instance_memory_gb
+resource "aws_instance" "chess_server" {
+  ami                    = data.aws_ami.ubuntu_22_04.id
+  instance_type          = var.instance_type
+  subnet_id              = aws_subnet.chess_public.id
+  vpc_security_group_ids = [aws_security_group.chess.id]
+  key_name               = aws_key_pair.chess.key_name
+
+  root_block_device {
+    volume_size = var.root_volume_size_gb
+    volume_type = "gp3"
   }
 
-  source_details {
-    source_type             = "image"
-    source_id               = data.oci_core_images.ubuntu_22_04_arm64.images[0].id
-    boot_volume_size_in_gbs = var.boot_volume_size_gb
-  }
+  user_data = data.cloudinit_config.chess_server.rendered
 
-  create_vnic_details {
-    subnet_id        = oci_core_subnet.chess_public.id
-    assign_public_ip = true
-    display_name     = "chess-server-vnic"
-    hostname_label   = "chess-server"
-  }
-
-  metadata = {
-    ssh_authorized_keys = var.ssh_public_key
-    user_data           = data.cloudinit_config.chess_server.rendered
+  tags = {
+    Name = "chess-server"
   }
 
   # Prevent accidental replacement of a live server
   lifecycle {
-    ignore_changes = [source_details[0].source_id]
+    ignore_changes = [ami]
   }
 }
