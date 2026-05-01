@@ -325,8 +325,8 @@ At this point the server is ready to receive the application.
 Terraform cannot find AWS credentials. Run `aws configure` and provide your access key ID and secret access key, then retry. Alternatively, export them as environment variables:
 
 ```bash
-export AWS_ACCESS_KEY_ID="AKIAIOSFODNN7EXAMPLE"
-export AWS_SECRET_ACCESS_KEY="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+export AWS_ACCESS_KEY_ID="AWS_SECRET_ACCESS_KEY"
+export AWS_SECRET_ACCESS_KEY="AWS_SECRET_ACCESS_KEY"
 export AWS_DEFAULT_REGION="us-east-1"
 ```
 

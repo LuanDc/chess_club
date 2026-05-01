@@ -35,3 +35,9 @@ chess-*.tar
 npm-debug.log
 /assets/node_modules/
 
+# Infrastructure outputs and secrets
+.env
+.env.local
+*.key
+*.pem
+
