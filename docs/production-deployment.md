@@ -355,12 +355,115 @@ cloud-init status         # should show: running
 top                       # should show cc1 or make processes consuming CPU
 ```
 
-If `cloud-init status` returns `error`:
+### cloud-init status: error
+
+If `cloud-init status` returns `error`, follow these steps to diagnose and fix:
+
+**Step 1: Check the cloud-init logs**
+
 ```bash
-sudo grep -i "error\|failed" /var/log/cloud-init-output.log | tail -30
+# View the full output log
+sudo tail -100 /var/log/cloud-init-output.log
+
+# Or search for errors/warnings
+sudo grep -i "error\|failed\|exception" /var/log/cloud-init-output.log | tail -30
+
+# If you see "scripts_user" failed, check the user script output
+sudo cat /var/log/cloud-init-output.log | grep -A 50 "scripts_user"
 ```
 
-Common causes: transient apt mirror failure, GitHub rate limit on the ASDF clone. Fix the failed step manually as the `deploy` user and re-run it.
+**Step 2: Check the detailed cloud-init result**
+
+```bash
+# Shows which stage failed (init, config, final)
+sudo cat /run/cloud-init/result.json | jq '.'
+```
+
+**Step 3: Common causes and fixes**
+
+**A. Transient apt mirror failure**
+
+Error pattern: `E: Unable to locate package` or `E: Failed to fetch`
+
+Fix:
+```bash
+sudo apt update
+sudo apt upgrade -y
+```
+
+**B. GitHub rate limit on ASDF clone**
+
+Error pattern: `api.github.com.*denied` or `fatal: unable to access`
+
+Wait 30-60 minutes for the rate limit to reset, then re-run ASDF setup:
+```bash
+sudo su - deploy
+rm -rf ~/.asdf
+git clone https://github.com/asdf-vm/asdf.git ~/.asdf --branch v0.14.0
+echo '. ~/.asdf/asdf.sh' >> ~/.bashrc
+source ~/.asdf/asdf.sh
+asdf plugin add erlang
+asdf plugin add elixir
+asdf install erlang 27.3.4
+asdf install elixir 1.17.3-otp-27
+```
+
+**C. Disk space exhaustion**
+
+Error pattern: `No space left on device` or `Write failed`
+
+Check:
+```bash
+df -h
+sudo du -sh /* | sort -hr | head -10
+```
+
+**D. Permission issues on /home/deploy**
+
+Error pattern: `Permission denied` when creating `.asdf` or writing to `.bashrc`
+
+This happens when the `deploy` user's home directory doesn't have correct ownership. Fix it:
+
+```bash
+# SSH as ubuntu
+ssh ubuntu@<instance_public_ip>
+
+# Fix ownership
+sudo chown -R deploy:deploy /home/deploy
+sudo chmod 755 /home/deploy
+
+# Fix bashrc if it exists but is unreadable
+sudo chmod 644 /home/deploy/.bashrc 2>/dev/null || true
+
+# Verify
+sudo su - deploy
+pwd  # should show /home/deploy
+```
+
+If `/home/deploy` is completely missing or corrupted, recreate it:
+
+```bash
+# As ubuntu user
+sudo userdel -r deploy 2>/dev/null || true
+sudo useradd -m -s /bin/bash deploy
+sudo chown -R deploy:deploy /home/deploy
+```
+
+**Step 4: Verify the fix**
+
+```bash
+# Check version file
+cat /home/deploy/version-check.txt
+
+# Test as deploy user
+sudo su - deploy
+. ~/.asdf/asdf.sh
+erlang --version
+elixir --version
+iex --version
+```
+
+Once all versions print correctly, you can proceed with deploying the application.
 
 ### version-check.txt missing or shows errors
 
