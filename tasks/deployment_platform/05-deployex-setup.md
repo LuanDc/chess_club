@@ -1,11 +1,11 @@
 # Task 05: DeployEx Installation and Configuration
 
 > RFC reference: §8.2 — DeployEx
-> Depends on: Task 01 (VM must be running), Task 02 (Object Storage bucket must exist), Task 04 (at least one release artefact must be in the bucket)
+> Depends on: Task 01 (VM must be running), Task 02 (S3 bucket must exist), Task 04 (at least one release artefact must be in the bucket)
 
 ## Goal
 
-Install DeployEx on the VM as a systemd service and configure it to poll Oracle Object Storage for `current.json`. Once running, DeployEx manages the full lifecycle of the chess application: downloading releases, performing hot upgrades when possible, monitoring health, and rolling back on failure. After this task, deployments are fully automated — pushing to `main` is the only manual step required.
+Install DeployEx on the VM as a systemd service and configure it to poll AWS S3 for `current.json`. Once running, DeployEx manages the full lifecycle of the chess application: downloading releases, performing hot upgrades when possible, monitoring health, and rolling back on failure. After this task, deployments are fully automated — pushing to `main` is the only manual step required.
 
 ## Checklist
 
@@ -22,8 +22,11 @@ Install DeployEx on the VM as a systemd service and configure it to poll Oracle 
   - [ ] `DEPLOYEX_ADMIN_HASHED_PASSWORD` — bcrypt hash of the dashboard password
   - [ ] `RELEASE_NODE` — Erlang node name for DeployEx (e.g. `deployex@<hostname>`)
   - [ ] `RELEASE_DISTRIBUTION` — set to `sname` (short names, single-node Phase 1)
-  - [ ] `DEPLOYEX_STORAGE_ADAPTER` — set to the OCI/S3-compatible adapter
-  - [ ] Object Storage credentials (region, bucket, namespace) for polling `current.json`
+  - [ ] `DEPLOYEX_STORAGE_ADAPTER` — set to the S3 adapter (see DeployEx docs for the exact value)
+  - [ ] `AWS_ACCESS_KEY_ID` — AWS credentials for accessing the S3 bucket (or rely on the EC2 Instance Profile)
+  - [ ] `AWS_SECRET_ACCESS_KEY` — (omit if using the EC2 IAM Instance Profile)
+  - [ ] `AWS_REGION` — AWS region where the S3 bucket resides (e.g. `us-east-1`)
+  - [ ] `DEPLOYEX_S3_BUCKET` — `chess-releases` (or the equivalent DeployEx env var for the bucket name)
 - [ ] Reload systemd, enable, and start DeployEx:
   - [ ] `sudo systemctl daemon-reload`
   - [ ] `sudo systemctl enable deployex`
@@ -44,7 +47,8 @@ Install DeployEx on the VM as a systemd service and configure it to poll Oracle 
 ## Notes / References
 
 - DeployEx releases: https://github.com/thiagoesteves/deployex/releases — download the asset labelled for OTP 27
-- DeployEx documentation: https://github.com/thiagoesteves/deployex
+- DeployEx documentation: https://github.com/thiagoesteves/deployex — check the S3 storage adapter configuration
 - bcrypt hash for the admin password can be generated with: `htpasswd -bnBC 10 "" <password> | tr -d ':\n'`
+- If the EC2 IAM Instance Profile (Task 02) grants S3 access, AWS credentials do not need to be set explicitly in the service file — the AWS SDK picks them up automatically
 - DeployEx monitors the new version for 10 minutes after deploy; automatic rollback triggers if health checks fail
 - The chess app and DeployEx **must share the same Erlang cookie** — set `RELEASE_COOKIE` consistently in both service files

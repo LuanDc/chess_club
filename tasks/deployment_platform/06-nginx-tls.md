@@ -48,4 +48,4 @@ Configure nginx as the public-facing reverse proxy with TLS termination via Let'
 - WebSocket upgrade headers are essential for Phoenix LiveView — without them, the LiveView connection silently fails
 - The DeployEx dashboard at `/deployex/` should ideally have an IP allowlist in nginx for security (see RFC §11)
 - Certbot systemd timer fires twice daily by default; certificates renew when less than 30 days remain
-- If using Oracle Cloud's firewall in addition to the OS-level iptables, ensure ports 80 and 443 are also open in the OCI Network Security Group or Security List
+- Ensure ports 80 and 443 are open in the EC2 Security Group (configured in Task 01 via Terraform)

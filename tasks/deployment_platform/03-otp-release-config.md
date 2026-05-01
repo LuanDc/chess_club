@@ -37,4 +37,4 @@ Configure the chess application to build correctly as a self-contained OTP relea
 - `mix release` docs: https://hexdocs.pm/mix/Mix.Tasks.Release.html
 - `config/runtime.exs` is evaluated at runtime (not compile time) — correct place for env var bindings
 - `SECRET_KEY_BASE` can be generated with `mix phx.gen.secret`
-- The release tar produced in Task 04 will be: `tar -czf chess-<sha>.tar.gz _build/prod/rel/chess`
+- The release tar produced in Task 04 will be: `tar -czf chess-<sha>.tar.gz _build/prod/rel/chess` and uploaded to S3
