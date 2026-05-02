@@ -6,8 +6,6 @@ variable "deployex_admin_password_hash" {
   description = "Bcrypt hash of the DeployEx admin password (for dashboard login)"
   type        = string
   sensitive   = true
-  # Example: "$2b$10$abcdef1234567890..."
-  # Generate with: htpasswd -bnBC 10 "" <password> | tr -d ':\n'
 }
 
 # Erlang distribution cookie — must match chess app's RELEASE_COOKIE
@@ -15,95 +13,139 @@ variable "release_cookie" {
   description = "Erlang distribution cookie (must match between DeployEx and chess app)"
   type        = string
   sensitive   = true
-  # Generate with: openssl rand -base64 32
 }
 
-# Note: S3 bucket name is derived from aws_s3_bucket.chess_releases in s3_storage.tf
-# AWS region variable (var.aws_region) is already defined in variables.tf
+# Store DeployEx secrets in AWS Secrets Manager
+resource "aws_secretsmanager_secret" "deployex" {
+  name                    = "deployex-chess-secrets"
+  recovery_window_in_days = 0
+}
 
-# Render the systemd service file for DeployEx
-locals {
-  deployex_service_content = templatefile("${path.module}/deployex.service.tpl", {
-    deployex_home              = "/opt/deployex"
-    deployex_admin_hash        = var.deployex_admin_password_hash
-    release_node               = "deployex@${aws_instance.chess_server.private_ip}"
-    release_cookie             = var.release_cookie
-    release_distribution       = "sname"
-    deployex_storage_adapter   = "s3"
-    aws_region                 = var.aws_region
-    s3_bucket                  = aws_s3_bucket.chess_releases.id
+resource "aws_secretsmanager_secret_version" "deployex" {
+  secret_id = aws_secretsmanager_secret.deployex.id
+  secret_string = jsonencode({
+    erlang_cookie           = var.release_cookie
+    admin_hashed_password   = var.deployex_admin_password_hash
   })
 }
 
-# Upload systemd service file to S3
-resource "aws_s3_object" "deployex_service" {
-  bucket  = aws_s3_bucket.chess_releases.id
-  key     = "deployex.service"
-  content = local.deployex_service_content
+# Upload deployex.yaml config to S3 so the instance can download it
+resource "aws_s3_object" "deployex_config" {
+  bucket = aws_s3_bucket.chess_releases.id
+  key    = "deployex.yaml"
+  content = templatefile("${path.module}/deployex.yaml.tpl", {
+    aws_region   = var.aws_region
+    s3_bucket    = aws_s3_bucket.chess_releases.id
+    secrets_path = aws_secretsmanager_secret.deployex.name
+  })
 }
 
-# Create the systemd service file on the EC2 instance
+# Allow EC2 instance to read the DeployEx secret
+resource "aws_iam_role_policy" "ec2_secrets_policy" {
+  name = "ec2-chess-secrets-policy"
+  role = aws_iam_role.ec2_chess_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["secretsmanager:GetSecretValue"]
+      Resource = aws_secretsmanager_secret.deployex.arn
+    }]
+  })
+}
+
+# Allow EC2 instance to register with SSM and receive commands
+resource "aws_iam_role_policy_attachment" "ec2_ssm_policy" {
+  role       = aws_iam_role.ec2_chess_role.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+}
+
+# SSM Document: installs DeployEx via the official deployex.sh script
 resource "aws_ssm_document" "deployex_setup" {
   name            = "deployex-setup"
   document_type   = "Command"
-  document_format = "YAML"
+  document_format = "JSON"
 
-  content = yamlencode({
+  content = jsonencode({
     schemaVersion = "2.2"
-    description   = "Install and configure DeployEx"
+    description   = "Install and configure DeployEx 0.9.0"
     mainSteps = [
       {
-        action = "aws:RunShellScript"
-        name   = "DeployEx Setup"
+        action = "aws:runShellScript"
+        name   = "DeployExSetup"
         inputs = {
           runCommand = [
             "#!/bin/bash",
             "set -e",
-            "",
-            "# Create DeployEx home directory",
-            "sudo mkdir -p /opt/deployex/releases",
-            "sudo chown -R deploy:deploy /opt/deployex",
-            "",
-            "# Download DeployEx binary (OTP 27)",
-            "DEPLOYEX_VERSION=0.8.0",
-            "DEPLOYEX_URL=\"https://github.com/thiagoesteves/deployex/releases/download/v$${DEPLOYEX_VERSION}/deployex-$${DEPLOYEX_VERSION}-otp-27-x86_64-linux.tar.gz\"",
-            "cd /tmp && curl -L -o deployex.tar.gz \"$${DEPLOYEX_URL}\"",
-            "tar -xzf deployex.tar.gz -C /tmp",
-            "sudo cp /tmp/deployex /usr/local/bin/deployex",
-            "sudo chmod +x /usr/local/bin/deployex",
-            "",
-            "# Download systemd service file from S3",
-            "aws s3 cp s3://${aws_s3_bucket.chess_releases.id}/deployex.service /tmp/deployex.service --region ${var.aws_region}",
-            "sudo cp /tmp/deployex.service /etc/systemd/system/deployex.service",
-            "sudo chmod 644 /etc/systemd/system/deployex.service",
-            "",
-            "# Enable and start the service",
-            "sudo systemctl daemon-reload",
-            "sudo systemctl enable deployex",
-            "sudo systemctl start deployex",
-            "",
-            "# Verify the service started",
+            "export PATH=$PATH:/usr/local/bin",
+            "apt-get install -y -q unzip curl",
+            "curl -fsSL https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -o /usr/local/bin/yq",
+            "chmod +x /usr/local/bin/yq",
+            "if ! aws --version &>/dev/null; then",
+            "  curl -fsSL https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip -o /tmp/awscliv2.zip",
+            "  unzip -q /tmp/awscliv2.zip -d /tmp",
+            "  /tmp/aws/install",
+            "fi",
+            "aws s3 cp s3://${aws_s3_bucket.chess_releases.id}/deployex.yaml /tmp/deployex.yaml --region ${var.aws_region}",
+            "curl -fsSL https://github.com/thiagoesteves/deployex/releases/download/0.9.0/deployex.sh -o /tmp/deployex.sh",
+            "chmod +x /tmp/deployex.sh",
+            "bash /tmp/deployex.sh --install /tmp/deployex.yaml",
             "sleep 5",
-            "sudo systemctl status deployex"
+            "systemctl status deployex"
           ]
         }
       }
     ]
   })
 
-  depends_on = [aws_s3_object.deployex_service]
+  depends_on = [
+    aws_s3_object.deployex_config,
+    aws_secretsmanager_secret_version.deployex
+  ]
 }
 
 # Invoke the DeployEx setup on the EC2 instance via AWS CLI
 resource "null_resource" "deployex_setup" {
+  triggers = {
+    document_version = aws_ssm_document.deployex_setup.default_version
+    config_etag      = aws_s3_object.deployex_config.etag
+    instance_id      = aws_instance.chess_server.id
+  }
+
   provisioner "local-exec" {
-    command = "aws ssm send-command --document-name ${aws_ssm_document.deployex_setup.name} --instance-ids ${aws_instance.chess_server.id} --service-role-arn ${aws_iam_role.ssm_role.arn} --region ${var.aws_region}"
+    command = <<-EOT
+      set -e
+      INSTANCE_ID="${aws_instance.chess_server.id}"
+      REGION="${var.aws_region}"
+      echo "Waiting for SSM agent to register on $INSTANCE_ID..."
+      for i in $(seq 1 40); do
+        STATUS=$(aws ssm describe-instance-information \
+          --filters "Key=InstanceIds,Values=$INSTANCE_ID" \
+          --region "$REGION" \
+          --query 'InstanceInformationList[0].PingStatus' \
+          --output text 2>/dev/null || echo "None")
+        if [ "$STATUS" = "Online" ]; then
+          echo "SSM agent is online."
+          break
+        fi
+        echo "Attempt $i/40: SSM status=$STATUS, retrying in 15s..."
+        sleep 15
+      done
+      aws ssm send-command \
+        --document-name "${aws_ssm_document.deployex_setup.name}" \
+        --instance-ids "$INSTANCE_ID" \
+        --service-role-arn "${aws_iam_role.ssm_role.arn}" \
+        --region "$REGION"
+    EOT
   }
 
   depends_on = [
     aws_instance.chess_server,
     aws_ssm_document.deployex_setup,
-    aws_iam_role_policy_attachment.ssm_instance_policy
+    aws_iam_role_policy_attachment.ssm_instance_policy,
+    aws_iam_role_policy_attachment.ec2_ssm_policy,
+    aws_iam_role_policy.ec2_secrets_policy
   ]
 }
 
@@ -123,7 +165,7 @@ resource "aws_iam_role" "ssm_role" {
   })
 }
 
-# Attach the SSM instance policy to allow EC2 commands
+# Attach the SSM policy to the SSM execution role
 resource "aws_iam_role_policy_attachment" "ssm_instance_policy" {
   role       = aws_iam_role.ssm_role.name
   policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
@@ -140,7 +182,6 @@ resource "aws_security_group_rule" "deployex_dashboard" {
   description       = "DeployEx dashboard"
 }
 
-# Output the DeployEx dashboard URL
 output "deployex_dashboard_url" {
   description = "URL to access DeployEx dashboard"
   value       = "http://${aws_instance.chess_server.public_ip}:5001"

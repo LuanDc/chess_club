@@ -12,13 +12,13 @@ provider "aws" {
   region = var.aws_region
 }
 
-data "aws_ami" "ubuntu_22_04" {
+data "aws_ami" "ubuntu_24_04" {
   most_recent = true
   owners      = ["099720109477"] # Canonical
 
   filter {
     name   = "name"
-    values = ["ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*"]
+    values = ["ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-*"]
   }
 
   filter {
@@ -47,7 +47,7 @@ resource "aws_key_pair" "chess" {
 }
 
 resource "aws_instance" "chess_server" {
-  ami                    = data.aws_ami.ubuntu_22_04.id
+  ami                    = data.aws_ami.ubuntu_24_04.id
   instance_type          = var.instance_type
   subnet_id              = aws_subnet.chess_public.id
   vpc_security_group_ids = [aws_security_group.chess.id]
@@ -65,8 +65,4 @@ resource "aws_instance" "chess_server" {
     Name = "chess-server"
   }
 
-  # Prevent accidental replacement of a live server
-  lifecycle {
-    ignore_changes = [ami]
-  }
 }
