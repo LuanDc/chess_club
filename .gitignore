@@ -32,9 +32,27 @@ chess-*.tar
 npm-debug.log
 /assets/node_modules/
 
+# Elixir LS (Language Server)
+/.elixir_ls/
+
+# Terraform
+*.tfstate
+*.tfstate.*
+*.tfstate.backup
+terraform.tfvars
+*.auto.tfvars
+.terraform/
+.terraform.lock.hcl
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+*.tfplan
+
 # Infrastructure outputs and secrets
 .env
 .env.local
 *.key
 *.pem
-
