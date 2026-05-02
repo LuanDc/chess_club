@@ -412,6 +412,19 @@ This configuration ensures that:
 - GitHub will not allow merge until all status checks are passing
 - Force push is disabled, protecting against accidental overrides
 
+### 7.2.1 Enable automatic deletion of head branches
+
+Automatically delete feature branches after they are merged to keep the repository clean.
+
+1. Go to **Settings → General** (default tab)
+2. Scroll to **"Pull Requests"** section
+3. Enable: ✓ **"Automatically delete head branches"**
+
+This ensures:
+- Feature branches are automatically deleted after a successful merge
+- Reduces clutter in the branch list
+- Prevents accidental work on stale branches
+
 ### 7.3 Test the CI/CD pipeline
 
 Before merging real changes, verify the pipeline works end-to-end.
