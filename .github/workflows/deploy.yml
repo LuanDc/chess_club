@@ -1,0 +1,100 @@
+name: Deploy
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  quality:
+    name: Quality
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "27.0"
+          elixir-version: "1.17.0"
+
+      - name: Cache Elixir dependencies
+        uses: actions/cache@v4
+        with:
+          path: deps
+          key: ${{ runner.os }}-deps-${{ hashFiles('**/mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-deps-
+
+      - name: Cache Elixir build
+        uses: actions/cache@v4
+        with:
+          path: _build
+          key: ${{ runner.os }}-build-${{ hashFiles('**/mix.lock') }}-otp-27-elixir-1.17
+          restore-keys: |
+            ${{ runner.os }}-build-
+
+      - run: mix deps.get
+
+      - run: mix quality
+
+  deploy:
+    name: Deploy
+    runs-on: ubuntu-latest
+    needs: quality
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "27.0"
+          elixir-version: "1.17.0"
+
+      - name: Cache Elixir dependencies
+        uses: actions/cache@v4
+        with:
+          path: deps
+          key: ${{ runner.os }}-deps-${{ hashFiles('**/mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-deps-
+
+      - name: Cache Elixir build
+        uses: actions/cache@v4
+        with:
+          path: _build
+          key: ${{ runner.os }}-build-${{ hashFiles('**/mix.lock') }}-otp-27-elixir-1.17
+          restore-keys: |
+            ${{ runner.os }}-build-
+
+      - run: mix deps.get
+
+      - run: mix assets.deploy
+
+      - name: Build OTP release
+        run: MIX_ENV=prod mix release
+        env:
+          SECRET_KEY_BASE: ${{ secrets.SECRET_KEY_BASE }}
+
+      - name: Archive release
+        run: tar -czf chess-${{ github.sha }}.tar.gz _build/prod/rel/chess
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Upload release to S3
+        run: aws s3 cp chess-${{ github.sha }}.tar.gz s3://chess-releases/chess-${{ github.sha }}.tar.gz
+
+      - name: Generate current.json
+        run: |
+          cat > current.json <<EOF
+          {
+            "version": "${{ github.sha }}",
+            "url": "https://chess-releases.s3.${{ secrets.AWS_REGION }}.amazonaws.com/chess-${{ github.sha }}.tar.gz"
+          }
+          EOF
+
+      - name: Upload current.json to S3
+        run: aws s3 cp current.json s3://chess-releases/current.json
