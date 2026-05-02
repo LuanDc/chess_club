@@ -87,16 +87,38 @@ on:
       - master
 
 jobs:
+  quality:
+    name: Quality
+    uses: ./.github/workflows/quality.yml
+
   deploy:
     name: Deploy
     runs-on: ubuntu-latest
+    needs: quality
     steps:
       - uses: actions/checkout@v4
 
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Extract versions from .tool-versions and AWS account ID
+        id: versions
+        run: |
+          erlang_version=$(grep 'erlang' .tool-versions | awk '{print $2}')
+          elixir_version=$(grep 'elixir' .tool-versions | awk '{print $2}')
+          aws_account_id=$(aws sts get-caller-identity --query Account --output text)
+          echo "erlang=$erlang_version" >> $GITHUB_OUTPUT
+          echo "elixir=$elixir_version" >> $GITHUB_OUTPUT
+          echo "aws_account_id=$aws_account_id" >> $GITHUB_OUTPUT
+
       - uses: erlef/setup-beam@v1
         with:
-          otp-version: "27.0"
-          elixir-version: "1.17.0"
+          otp-version: ${{ steps.versions.outputs.erlang }}
+          elixir-version: ${{ steps.versions.outputs.elixir }}
 
       - name: Cache Elixir dependencies
         uses: actions/cache@v4
@@ -110,7 +132,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: _build
-          key: ${{ runner.os }}-build-${{ hashFiles('**/mix.lock') }}-otp-27-elixir-1.17
+          key: ${{ runner.os }}-build-${{ hashFiles('**/mix.lock', 'lib/**', 'test/**', 'mix.exs') }}-${{ steps.versions.outputs.erlang }}-${{ steps.versions.outputs.elixir }}
           restore-keys: |
             ${{ runner.os }}-build-
 
@@ -126,33 +148,28 @@ jobs:
       - name: Archive release
         run: tar -czf chess-${{ github.sha }}.tar.gz _build/prod/rel/chess
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION }}
-
       - name: Upload release to S3
-        run: aws s3 cp chess-${{ github.sha }}.tar.gz s3://chess-releases/chess-${{ github.sha }}.tar.gz
+        run: aws s3 cp chess-${{ github.sha }}.tar.gz s3://chess-releases-${{ steps.versions.outputs.aws_account_id }}/chess-${{ github.sha }}.tar.gz
 
       - name: Generate current.json
         run: |
           cat > current.json <<EOF
           {
             "version": "${{ github.sha }}",
-            "url": "https://chess-releases.s3.${{ secrets.AWS_REGION }}.amazonaws.com/chess-${{ github.sha }}.tar.gz"
+            "url": "https://chess-releases-${{ steps.versions.outputs.aws_account_id }}.s3.${{ secrets.AWS_REGION }}.amazonaws.com/chess-${{ github.sha }}.tar.gz"
           }
           EOF
 
       - name: Upload current.json to S3
-        run: aws s3 cp current.json s3://chess-releases/current.json
+        run: aws s3 cp current.json s3://chess-releases-${{ steps.versions.outputs.aws_account_id }}/current.json
 ```
 
 **Key features:**
-- Runs automatically on every push to `master`
-- No explicit dependency on quality checks (use branch protection rules to enforce)
-- Builds, archives, and deploys the release to S3
+- Runs automatically on every push to `master` after `quality` workflow passes
+- Calls `quality` workflow as a reusable workflow and depends on its success
+- Extracts runtime versions from `.tool-versions` and AWS account ID dynamically
+- Uses dynamic bucket name: `chess-releases-${AWS_ACCOUNT_ID}` (matches Terraform configuration)
+- Caches based on extracted Erlang/Elixir versions for better cache consistency
 
 ### 2. GitHub Actions secrets (already configured)
 
@@ -244,10 +261,16 @@ gh run view <run-id>
 gh run view <run-id> --log
 ```
 
-Check S3 releases:
+Check S3 releases (with account ID in bucket name):
 ```bash
-aws s3 ls s3://chess-releases/
-aws s3 cp s3://chess-releases/current.json - | jq .
+# Get your AWS account ID
+AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+
+# List releases in the bucket
+aws s3 ls s3://chess-releases-${AWS_ACCOUNT_ID}/
+
+# View current.json
+aws s3 cp s3://chess-releases-${AWS_ACCOUNT_ID}/current.json - | jq .
 ```
 
 ## Status

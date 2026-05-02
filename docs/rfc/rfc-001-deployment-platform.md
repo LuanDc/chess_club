@@ -65,18 +65,24 @@ For a stateful application like this chess server, the hot upgrade capability is
 
 ## 6. Cloud Provider Decision
 
-Because this is a personal project, the infrastructure must be free with no time limit.
+Because this is a personal project, the infrastructure must be free (or minimal cost) with no time limit.
 
 | Provider | Free VM | RAM | Storage | Expiry | Notes |
 |---|---|---|---|---|---|
-| **Oracle Cloud** | 4 ARM VMs (Ampere A1) | **24 GB total** | 20 GB Object Storage | **Never** | Best free tier available |
+| **AWS** | 1 t2.micro → t3.small | 1 GB → 2 GB | 5 GB S3 | 12 months → unlimited | Free tier suitable for 12 months; micro adequate for chess app alone |
+| Oracle Cloud | 4 ARM VMs (Ampere A1) | **24 GB total** | 20 GB Object Storage | **Never** | Better long-term, higher learning curve |
 | GCP | 1 e2-micro | 0.6 GB | 5 GB | Never | RAM too tight for BEAM |
-| AWS | 1 t2.micro | 1 GB | 5 GB S3 | 12 months | Expires; not sustainable |
 | Fly.io | 3 shared VMs | 256 MB each | — | Never | RAM insufficient |
 
-**Decision: Oracle Cloud Always Free Tier**
+**Decision: AWS EC2 + S3**
 
-Oracle's Always Free programme provides up to **4 ARM (Ampere A1) OCPUs and 24 GB RAM** with no expiry. A single VM configured with 2 OCPUs and 4 GB RAM is more than adequate to run DeployEx alongside the chess application. Oracle Object Storage (20 GB Always Free) stores the release artefacts.
+AWS provides a **t3.small** (2 vCPU, 4 GB RAM) EC2 instance and S3 bucket via the free tier (750 hours/month for 12 months on t2.micro; t3.small has minimal hourly cost outside free tier). For phase 1, AWS offers:
+- Better integration with GitHub Actions (native AWS credential support)
+- Simpler Terraform configuration and wider documentation
+- S3 lifecycle policies for automatic release artifact retention
+- Straightforward migration path to on-demand if needed
+
+Post-free-tier cost: t3.small (~$0.02/hour) + minimal S3 storage (~$0.01/month) = ~$15/month. Acceptable for a personal project with mature tooling support.
 
 ---
 
@@ -98,13 +104,14 @@ Oracle's Always Free programme provides up to **4 ARM (Ampere A1) OCPUs and 24 G
                           Internet
                               │
                     ┌─────────▼──────────┐
-                    │  Oracle Cloud VM   │
-                    │  ARM A1 — Ubuntu   │
+                    │   AWS EC2 VM       │
+                    │  t3.small — Ubuntu │
+                    │     (via IaC)      │
                     │                    │
                     │  ┌──────────────┐  │
   HTTPS (:443) ────►│  │    nginx     │  │
   HTTP  (:80)  ────►│  │              │  │  ← TLS via Let's Encrypt
-                    │  │ /  → :4000   │  │
+                    │  │ /  → :4000   │  │  ← managed by Certbot
                     │  │ /d → :5001   │  │
                     │  └──────┬───────┘  │
                     │         │          │
@@ -120,32 +127,31 @@ Oracle's Always Free programme provides up to **4 ARM (Ampere A1) OCPUs and 24 G
                     │  ┌──────────────┐  │
                     │  │  DeployEx    │  │
                     │  │  (:5001)     │  │
-                    │  │              │  │
-                    │  │ polls Object │  │  ← detects new current.json
-                    │  │ Storage for  │  │
-                    │  │ manifest     │  │
-                    │  │              │  │
-                    │  │ deploys or   │  │  ← hot upgrade preferred
-                    │  │ hot-upgrades │  │
-                    │  │ chess app    │  │
+                    │  │              │  │  ← Phase 2: polls S3 for
+                    │  │ Instance      │  │    current.json manifest
+                    │  │ Profile w/    │  │
+                    │  │ S3 IAM Role   │  │
                     │  └──────────────┘  │
                     └────────────────────┘
 
   ┌─────────────────────────────────────┐
-  │         GitHub Actions              │
+  │      GitHub Actions (CI/CD)         │
   │                                     │
-  │  push to main                       │
+  │  push to master                     │
   │    │                                │
-  │    ├─ mix quality (credo+dialyzer   │
-  │    │   +tests)                      │
+  │    ├─ quality workflow               │
+  │    │  (credo+dialyzer+tests)        │
   │    │                                │
-  │    ├─ MIX_ENV=prod mix release      │
-  │    │                                │
-  │    ├─ tar.gz artefact               │
-  │    │                                │
-  │    └─ upload to Oracle Object       │
-  │       Storage                       │
-  │       └─ update current.json ───────┼──► DeployEx detects → deploys
+  │    ├─ deploy workflow (needs: quality)
+  │    │  ├─ Mix deps.get                │
+  │    │  ├─ mix assets.deploy           │
+  │    │  ├─ MIX_ENV=prod mix release   │
+  │    │  ├─ tar.gz release artefact    │
+  │    │  │                              │
+  │    │  └─ upload to AWS S3            │
+  │    │     s3://chess-releases-<ID>/   │
+  │    │     └─ update current.json ─────┼──► DeployEx detects → deploys
+  │                                     │    (Phase 2)
   └─────────────────────────────────────┘
 ```
 
@@ -167,21 +173,29 @@ Oracle's Always Free programme provides up to **4 ARM (Ampere A1) OCPUs and 24 G
 
 ## 8. Component Setup
 
-### 8.1 Oracle Cloud VM
+### 8.1 AWS EC2 Instance (via Terraform)
 
-- **Shape:** VM.Standard.A1.Flex (ARM Ampere A1) — Always Free
-- **Resources:** 2 OCPUs, 4 GB RAM (within the 4 OCPU / 24 GB free allowance)
-- **OS:** Ubuntu 22.04 LTS (ARM64)
-- **Storage:** 50 GB boot volume (Always Free block storage)
-- **Network:** VCN with public subnet; Security List opens ports 22, 80, 443
+The EC2 instance and all supporting infrastructure are provisioned using Terraform.
 
-**Provisioning steps (manual, documented):**
-1. Create Oracle Cloud account and enable Always Free resources.
-2. Create a VCN and public subnet via OCI Console.
-3. Launch an A1 Flex instance with Ubuntu 22.04.
-4. SSH in, install ASDF, then OTP + Elixir matching the application's version.
-5. Install DeployEx binary from GitHub releases (must match OTP version).
-6. Install nginx and Certbot.
+- **Instance type:** t3.small (2 vCPU, 4 GB RAM) — suitable for chess app + DeployEx
+  - Free tier eligible: t2.micro for 12 months; t3.small has per-hour cost post-free-tier
+  - Override in `terraform.tfvars` if cost is a concern
+- **OS:** Ubuntu 22.04 LTS (x86_64 HVM)
+- **Storage:** 20 GB gp3 EBS root volume
+- **Network:** VPC (10.0.0.0/16) with public subnet (10.0.1.0/24); security group opens ports 22, 80, 443
+- **Cloud-init:** Automatically installs ASDF, Erlang, Elixir, and creates `deploy` user
+
+**Provisioning (automatic via Terraform):**
+```bash
+cd infra/terraform/
+cp terraform.tfvars.example terraform.tfvars
+# Edit terraform.tfvars with your SSH key, region, and instance type
+terraform init
+terraform plan
+terraform apply
+```
+
+This single command provisions the entire EC2 + VPC + security infrastructure. See `tasks/infra/01-aws-ec2-vm.md` for detailed steps.
 
 ### 8.2 DeployEx
 
@@ -237,17 +251,22 @@ TLS certificates are obtained and auto-renewed via **Certbot** (Let's Encrypt), 
 
 ### 8.4 GitHub Actions CI/CD
 
-The pipeline has two jobs: `quality` and `deploy`.
+The pipeline is split across two workflow files:
+
+#### quality.yml (runs on pull requests)
+
+Executes on every PR targeting `master` (including when marking a draft PR as ready for review). Skips draft PRs to reduce CI cost.
 
 ```yaml
-# .github/workflows/deploy.yml (sketch)
-
 on:
-  push:
-    branches: [main]
+  pull_request:
+    types: [opened, synchronize, ready_for_review]
+    branches:
+      - master
 
 jobs:
   quality:
+    if: github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -257,46 +276,83 @@ jobs:
           elixir-version: '1.17'
       - run: mix deps.get
       - run: mix quality   # credo strict + dialyzer + tests
+```
+
+#### deploy.yml (runs on push to master)
+
+Runs only after `quality` passes (enforced via GitHub branch protection rules and workflow dependency).
+
+```yaml
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  quality:
+    uses: ./.github/workflows/quality.yml
 
   deploy:
     needs: quality
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+      - name: Extract versions and AWS account ID
+        id: versions
+        run: |
+          erlang_version=$(grep 'erlang' .tool-versions | awk '{print $2}')
+          elixir_version=$(grep 'elixir' .tool-versions | awk '{print $2}')
+          aws_account_id=$(aws sts get-caller-identity --query Account --output text)
+          echo "erlang=$erlang_version" >> $GITHUB_OUTPUT
+          echo "elixir=$elixir_version" >> $GITHUB_OUTPUT
+          echo "aws_account_id=$aws_account_id" >> $GITHUB_OUTPUT
       - uses: erlef/setup-beam@v1
         with:
-          otp-version: '27'
-          elixir-version: '1.17'
+          otp-version: ${{ steps.versions.outputs.erlang }}
+          elixir-version: ${{ steps.versions.outputs.elixir }}
       - run: mix deps.get
       - run: mix assets.deploy
       - run: MIX_ENV=prod mix release
       - run: tar -czf chess-${{ github.sha }}.tar.gz _build/prod/rel/chess
-      - name: Upload to Oracle Object Storage
-        run: |
-          # Using OCI CLI or rclone (S3-compatible API)
-          oci os object put \
-            --bucket-name chess-releases \
-            --file chess-${{ github.sha }}.tar.gz \
-            --name chess-${{ github.sha }}.tar.gz
+      - name: Upload to AWS S3
+        run: aws s3 cp chess-${{ github.sha }}.tar.gz s3://chess-releases-${{ steps.versions.outputs.aws_account_id }}/chess-${{ github.sha }}.tar.gz
       - name: Update current.json
         run: |
-          echo '{"version":"${{ github.sha }}","url":"https://objectstorage.../chess-${{ github.sha }}.tar.gz"}' \
-            > current.json
-          oci os object put \
-            --bucket-name chess-releases \
-            --file current.json \
-            --name current.json
+          cat > current.json <<EOF
+          {"version":"${{ github.sha }}","url":"https://chess-releases-${{ steps.versions.outputs.aws_account_id }}.s3.${{ secrets.AWS_REGION }}.amazonaws.com/chess-${{ github.sha }}.tar.gz"}
+          EOF
+          aws s3 cp current.json s3://chess-releases-${{ steps.versions.outputs.aws_account_id }}/current.json
 ```
 
-Secrets stored in GitHub Actions secrets: `OCI_CLI_KEY`, `OCI_TENANCY`, `OCI_USER`, `OCI_FINGERPRINT`, `OCI_REGION`.
+**Secrets stored in GitHub Actions:**
+- `AWS_ACCESS_KEY_ID` — IAM user access key
+- `AWS_SECRET_ACCESS_KEY` — IAM user secret key  
+- `AWS_REGION` — S3 bucket region
+- `SECRET_KEY_BASE` — Phoenix secret key (used in Build OTP release step)
 
-### 8.5 Oracle Object Storage
+**Key improvements:**
+- Versions are extracted at runtime from `.tool-versions`, ensuring CI always matches the project's configured OTP/Elixir
+- AWS account ID is queried dynamically via `aws sts get-caller-identity`, making the bucket name self-discovering
+- Reusable workflow pattern for `quality` allows both PR checks and deploy workflow to use the same test suite
 
-- **Bucket:** `chess-releases` (private)
+### 8.5 AWS S3 Bucket (previously Oracle Object Storage)
+
+The deployment architecture uses **AWS S3** for release artifact storage (not Oracle Object Storage as originally proposed in §6 — AWS S3 provides better free-tier economics and wider tooling support).
+
+- **Bucket name:** `chess-releases-<aws-account-id>` (includes AWS account ID for global uniqueness)
 - **Contents:**
   - `current.json` — manifest pointing to the latest version
-  - `chess-<sha>.tar.gz` — versioned release artefacts (retained for rollback)
-- **Access:** DeployEx on the VM uses an OCI instance principal or API key to read from the bucket
+  - `chess-<sha>.tar.gz` — versioned release artefacts (retained for rollback per lifecycle policy)
+- **Access:**
+  - **GitHub Actions**: IAM user (`github-actions-chess`) with S3 put/get/list permissions + `sts:GetCallerIdentity`
+  - **EC2 instance** (future DeployEx integration): IAM instance profile with S3 read permissions
+- **Lifecycle policy:** Expires object versions older than 60 days (keeps last ~5 releases)
 
 ---
 
@@ -358,19 +414,19 @@ When multi-node clustering is implemented via `libcluster`:
 | Risk | Likelihood | Impact | Mitigation |
 |---|---|---|---|
 | Full restart drops active games | Medium | Medium | Hot upgrades preferred; document as known limitation |
-| Oracle Cloud changes Always Free limits | Low | High | Migration to GCP e2-micro or Railway is straightforward |
-| OTP version mismatch between DeployEx and chess | Medium | High | Pin OTP version in ASDF `.tool-versions`; enforce in CI |
+| AWS free tier expires (12 months) | Medium | Medium | t3.small post-free-tier cost ~$15/month; acceptable for personal project; can migrate to Oracle Always Free if needed |
+| OTP version mismatch between DeployEx and chess | Medium | High | Extract OTP/Elixir versions at runtime from `.tool-versions` in CI; enforce in Terraform cloud-init |
 | Let's Encrypt certificate renewal fails | Low | High | Certbot systemd timer + monitoring; manual renewal documented |
-| Object Storage unavailable during deploy | Low | Low | DeployEx retries; previous version keeps running |
+| S3 bucket access denied during deploy | Low | Medium | GitHub Actions IAM user has explicit S3 + STS permissions; permissions defined in Terraform |
+| AWS credentials leaked in GitHub logs | Low | High | Secrets are GitHub Actions secrets (masked in logs); long-term: migrate to OIDC provider authentication |
 
 ---
 
 ## 13. Open Questions
 
 1. Should the DeployEx dashboard be exposed via nginx (with auth) or only accessible via SSH tunnel?
-2. Should release artefacts be stored in Oracle Object Storage (OCI-native) or via the S3-compatible API using standard tooling (rclone, AWS CLI)?
-3. What retention policy should be applied to old release artefacts in Object Storage?
-4. When planning the multi-node phase, should `libcluster` use DNS-based discovery (suitable for Oracle Cloud) or gossip-based?
+2. When planning the multi-node phase, should `libcluster` use DNS-based discovery or gossip-based discovery?
+3. How should we handle scaling beyond the free tier if user load increases? (Migration to multi-node clustering, increased instance type, additional regions)
 
 ---
 

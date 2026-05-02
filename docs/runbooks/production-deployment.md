@@ -460,17 +460,22 @@ git push origin test-pipeline:main
 
 **Step 4: Verify artifacts in S3**
 
+The S3 bucket name includes the AWS account ID for uniqueness: `chess-releases-<account-id>`. To verify artifacts:
+
 ```bash
+# Get your AWS account ID
+AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+
 # List all releases in S3
-aws s3 ls s3://chess-releases/
+aws s3 ls s3://chess-releases-${AWS_ACCOUNT_ID}/
 
 # Check the current.json file
-aws s3 cp s3://chess-releases/current.json - | jq .
+aws s3 cp s3://chess-releases-${AWS_ACCOUNT_ID}/current.json - | jq .
 
 # Expected output:
 # {
 #   "version": "abc123def...",
-#   "url": "https://chess-releases.s3.us-east-1.amazonaws.com/chess-abc123def....tar.gz"
+#   "url": "https://chess-releases-<account-id>.s3.us-east-1.amazonaws.com/chess-abc123def....tar.gz"
 # }
 ```
 
@@ -486,14 +491,15 @@ The `.github/workflows/deploy.yml` workflow has two jobs:
 - **Skipped for draft PRs** — allows early commits without blocking quality checks
 - Fails the build if any check fails
 
-**`deploy` job** (runs only after `quality` passes and PR is merged):
+**`deploy` job** (runs only after `quality` passes):
 - Checks out code
-- Sets up Erlang 27.0 and Elixir 1.17.0
+- Configures AWS credentials from GitHub secrets
+- Extracts Erlang/Elixir versions from `.tool-versions` and AWS account ID dynamically
+- Sets up Erlang and Elixir matching the extracted versions
 - Builds assets with `mix assets.deploy`
 - Builds OTP release with `MIX_ENV=prod mix release`
 - Archives release as `chess-<git-sha>.tar.gz`
-- Configures AWS credentials from secrets
-- Uploads archive to `s3://chess-releases/`
+- Uploads archive to `s3://chess-releases-<account-id>/` (bucket name includes AWS account ID)
 - Generates and uploads `current.json` with version and download URL
 
 **Draft PR behavior:**
@@ -547,9 +553,10 @@ When you change a PR from draft to ready, GitHub sends a `ready_for_review` even
 
 Check the workflow run logs similarly. Common causes:
 - **AWS credentials invalid**: Verify `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` in GitHub Secrets
-- **S3 bucket doesn't exist**: Ensure `chess-releases` S3 bucket exists and is accessible to your IAM user
+- **S3 bucket doesn't exist or access denied**: Ensure `chess-releases-<account-id>` bucket exists and your IAM user can access it. The bucket name is generated dynamically using the AWS account ID.
 - **SECRET_KEY_BASE missing or invalid**: Regenerate with `mix phx.gen.secret` and update the secret
 - **Mix release build fails**: Check the "Build OTP release" step output
+- **aws sts get-caller-identity fails**: The AWS credentials may not have STS permissions. Ensure the GitHub Actions IAM user has the `sts:GetCallerIdentity` permission (usually included in standard AWS policies)
 
 **Slow pipeline**
 
