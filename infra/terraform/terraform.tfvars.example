@@ -15,3 +15,14 @@ ssh_public_key = "ssh-ed25519 AAAAC3Nza... user@host"
 # OTP and Elixir versions — must stay in sync with DeployEx (Task 05)
 erlang_version = "27.3.4"
 elixir_version = "1.17.3-otp-27"
+
+# DeployEx Configuration (Task 05)
+# Generate bcrypt hash: echo "my-password" | htpasswd -bnBC 10 "" - | tr -d ':\n'
+deployex_admin_password_hash = "$2b$10$YourBcryptHashHere..."
+
+# Generate random cookie: openssl rand -base64 32
+# Must match chess app's RELEASE_COOKIE environment variable
+release_cookie = "YourSecureRandomCookieHere..."
+
+# S3 bucket name from Task 02 (or construct: chess-releases-{aws-account-id})
+s3_bucket_name = "chess-releases-123456789012"

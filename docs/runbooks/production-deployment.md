@@ -10,8 +10,9 @@ This guide takes you from zero — no AWS account, no local tooling — to a ful
 4. [Configure terraform.tfvars](#4-configure-terraformtfvars)
 5. [Run Terraform](#5-run-terraform)
 6. [Verify cloud-init Completion](#6-verify-cloud-init-completion)
-7. [GitHub Actions CI/CD Setup](#7-github-actions-cicd-setup)
-8. [Troubleshooting](#8-troubleshooting)
+7. [DeployEx Installation and Configuration](#7-deployex-installation-and-configuration-task-05)
+8. [GitHub Actions CI/CD Setup](#8-github-actions-cicd-setup)
+9. [Troubleshooting](#9-troubleshooting)
 
 ---
 
@@ -365,11 +366,90 @@ At this point the server is ready to receive the application.
 
 ---
 
-## 7. GitHub Actions CI/CD Setup
+## 7. DeployEx Installation and Configuration (Task 05)
 
-Once your EC2 instance is provisioned and cloud-init is complete, configure GitHub Actions to automate builds and deployments on every push to `main`.
+Before configuring GitHub Actions, you must set up DeployEx on the EC2 instance. DeployEx is the deployment automation system that manages the chess application lifecycle on the VM.
 
-### 7.1 Add GitHub Actions Secrets
+### 7.1 Generate Secrets Required for DeployEx
+
+DeployEx needs an admin password (for dashboard access) and an Erlang cookie (for distributed Erlang communication). Generate these before running Terraform:
+
+```bash
+# Generate bcrypt hash for admin dashboard password
+# Replace "my-secure-password" with your desired password
+echo "my-secure-password" | htpasswd -bnBC 10 "" - | tr -d ':\n'
+# Output: $2b$10$...
+
+# Generate random Erlang cookie (base64, 32 bytes)
+# This MUST be the same for both DeployEx and the chess application
+openssl rand -base64 32
+# Output: AbCdEfGhIjKlMnOpQrStUvWxYz...
+```
+
+Save both outputs — you'll need them in the next step.
+
+### 7.2 Update terraform.tfvars with DeployEx Configuration
+
+Add the generated secrets to your `terraform.tfvars`:
+
+```hcl
+# DeployEx admin password hash (from above)
+deployex_admin_password_hash = "$2b$10$..."
+
+# Erlang distribution cookie (from above, must match chess app's RELEASE_COOKIE)
+release_cookie = "AbCdEfGhIjKlMnOpQrStUvWxYz..."
+
+# S3 bucket name (get from Task 02 output or construct)
+s3_bucket_name = "chess-releases-$(aws sts get-caller-identity --query Account --output text)"
+```
+
+### 7.3 Deploy DeployEx via Terraform
+
+```bash
+cd infra/terraform
+terraform init  # If not already done
+terraform plan
+terraform apply
+```
+
+Terraform will:
+- Create the systemd service file on the EC2 instance
+- Download and install the DeployEx binary (OTP 27)
+- Start the DeployEx service automatically
+- Open port 5001 in the security group (dashboard access)
+
+### 7.4 Verify DeployEx is Running
+
+```bash
+# Get the dashboard URL
+terraform output deployex_dashboard_url
+# Output: http://54.123.xxx.xxx:5001
+
+# SSH into the instance and verify the service
+ssh deploy@<instance-ip>
+
+# Check service status
+sudo systemctl status deployex
+
+# View logs
+sudo journalctl -u deployex -n 20
+```
+
+### 7.5 Access the DeployEx Dashboard
+
+Open your browser and navigate to the URL from step 7.4 (e.g., `http://54.123.xxx.xxx:5001`):
+
+1. The dashboard loads and shows the chess application in the "available releases" section
+2. Click **Login** and enter the admin password you generated in step 7.1
+3. You should see the chess application listed with no active deployment yet (waiting for `current.json` in S3)
+
+---
+
+## 8. GitHub Actions CI/CD Setup
+
+Once your EC2 instance is provisioned, cloud-init is complete, and DeployEx is running, configure GitHub Actions to automate builds and deployments on every push to `master`.
+
+### 8.1 Add GitHub Actions Secrets
 
 GitHub Actions needs AWS credentials and a secret key to build and deploy the application. AWS credentials were already stored in Section 3.4.
 
@@ -392,7 +472,7 @@ mix phx.gen.secret
 
 > **Note:** `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` are set once in Section 3.4 and persist across infrastructure rebuilds — they do NOT come from Terraform outputs.
 
-### 7.2 Set branch protection on `master`
+### 8.2 Set branch protection on `master`
 
 Enforce that all merges to `master` pass quality checks before deployment.
 
@@ -412,7 +492,7 @@ This configuration ensures that:
 - GitHub will not allow merge until all status checks are passing
 - Force push is disabled, protecting against accidental overrides
 
-### 7.2.1 Enable automatic deletion of head branches
+### 8.2.1 Enable automatic deletion of head branches
 
 Automatically delete feature branches after they are merged to keep the repository clean.
 
@@ -425,7 +505,7 @@ This ensures:
 - Reduces clutter in the branch list
 - Prevents accidental work on stale branches
 
-### 7.3 Test the CI/CD pipeline
+### 8.3 Test the CI/CD pipeline
 
 Before merging real changes, verify the pipeline works end-to-end.
 
@@ -479,7 +559,7 @@ aws s3 cp s3://chess-releases-${AWS_ACCOUNT_ID}/current.json - | jq .
 # }
 ```
 
-### 7.4 What the CI/CD pipeline does
+### 8.4 What the CI/CD pipeline does
 
 The `.github/workflows/deploy.yml` workflow has two jobs:
 
@@ -508,7 +588,7 @@ The `.github/workflows/deploy.yml` workflow has two jobs:
 - This allows you to push work-in-progress commits without triggering expensive builds
 - The branch protection rule prevents merging until `quality` passes
 
-### 7.5 Draft PR behavior
+### 8.5 Draft PR behavior
 
 When you create a pull request as a **draft**:
 - The `quality` job is automatically skipped
@@ -522,7 +602,7 @@ When you mark the PR as **ready for review**:
 
 **Note:** Draft PRs cannot be merged even if they pass all checks — the branch protection rule requires the PR to be ready for review.
 
-### 7.6 Troubleshooting CI/CD failures
+### 8.6 Troubleshooting CI/CD failures
 
 **quality job fails**
 
@@ -567,7 +647,7 @@ Check the workflow run logs similarly. Common causes:
 
 ---
 
-## 8. Troubleshooting
+## 9. Troubleshooting
 
 ### "Error: configuring Terraform AWS Provider: no valid credential sources found"
 
