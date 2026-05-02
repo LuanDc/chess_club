@@ -196,6 +196,9 @@ Open `terraform.tfvars` and fill in your values:
 # AWS region (must match the region you configured with aws configure)
 aws_region = "us-east-1"
 
+# Availability zone within the region (e.g. us-east-1a, us-east-1b, us-east-1c, us-east-1d, us-east-1f)
+availability_zone = "us-east-1a"
+
 # Full contents of your SSH public key
 ssh_public_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... chess-deploy"
 
@@ -209,6 +212,7 @@ elixir_version = "1.17.3-otp-27"
 | Variable | Description | Where to find it |
 |---|---|---|
 | `aws_region` | AWS region for all resources | The region you chose in Section 2.2 |
+| `availability_zone` | Availability zone within the region | Choose from your region's AZs (e.g., `us-east-1a`). If you get "instance type not supported" errors, try a different AZ |
 | `ssh_public_key` | SSH public key for instance access | `cat ~/.ssh/chess_deploy.pub` |
 | `instance_type` | EC2 instance type | Default: `t3.small`. Use `t2.micro` for free tier |
 | `root_volume_size_gb` | EBS root volume size | Default: `20` GB |
@@ -521,6 +525,41 @@ A key pair named `chess-deploy` already exists in your AWS account for this regi
 ```bash
 terraform import aws_key_pair.chess chess-deploy
 ```
+
+### "Your requested instance type is not supported in your requested Availability Zone"
+
+This error occurs when the `t3.small` (or your chosen instance type) is not available in the specified availability zone.
+
+**Solution:**
+
+1. Edit `terraform.tfvars` and change the `availability_zone`:
+   ```bash
+   availability_zone = "us-east-1b"  # Try a different AZ
+   ```
+
+2. Destroy the current infrastructure (if it exists):
+   ```bash
+   cd infra/terraform/
+   terraform destroy  # Type 'yes' when prompted
+   ```
+
+3. Apply again:
+   ```bash
+   terraform plan
+   terraform apply
+   ```
+
+If the error persists, try other availability zones in your region:
+- For `us-east-1`: try `us-east-1a`, `us-east-1b`, `us-east-1c`, `us-east-1d`, or `us-east-1f`
+- For other regions: check AWS Console → EC2 → Instances to see which AZs are active
+
+Alternatively, use a different instance type that may be more widely available:
+```hcl
+instance_type = "t2.micro"  # Free tier eligible (slower Erlang compile)
+instance_type = "t3.medium" # More resources, different availability
+```
+
+---
 
 ### SSH "Connection refused" after apply
 
