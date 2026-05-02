@@ -1,4 +1,4 @@
-# Chess Club A
+# Chess Club A B
 
 A real-time multiplayer chess application built with **Phoenix LiveView**. Players pick a nickname, create or join a room from the lobby, and play live games over WebSockets — no accounts, no database, no page reloads.
 
