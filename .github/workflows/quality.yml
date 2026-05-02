@@ -1,0 +1,39 @@
+name: Quality
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review]
+    branches:
+      - master
+
+jobs:
+  quality:
+    name: Quality
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "27.0"
+          elixir-version: "1.17.0"
+
+      - name: Cache Elixir dependencies
+        uses: actions/cache@v4
+        with:
+          path: deps
+          key: ${{ runner.os }}-deps-${{ hashFiles('**/mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-deps-
+
+      - name: Cache Elixir build
+        uses: actions/cache@v4
+        with:
+          path: _build
+          key: ${{ runner.os }}-build-${{ hashFiles('**/mix.lock') }}-otp-27-elixir-1.17
+          restore-keys: |
+            ${{ runner.os }}-build-
+
+      - run: mix deps.get
+
+      - run: mix quality
