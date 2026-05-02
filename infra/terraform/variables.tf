@@ -4,6 +4,12 @@ variable "aws_region" {
   default     = "us-east-1"
 }
 
+variable "availability_zone" {
+  description = "Availability zone for the subnet (e.g. us-east-1a, us-east-1b). If unspecified, AWS chooses automatically."
+  type        = string
+  default     = "us-east-1a"
+}
+
 variable "ssh_public_key" {
   description = "SSH public key content to authorize on the instance (paste the full key string)"
   type        = string
