@@ -196,6 +196,9 @@ Open `terraform.tfvars` and fill in your values:
 # AWS region (must match the region you configured with aws configure)
 aws_region = "us-east-1"
 
+# Availability zone within the region (e.g. us-east-1a, us-east-1b, us-east-1c, us-east-1d, us-east-1f)
+availability_zone = "us-east-1a"
+
 # Full contents of your SSH public key
 ssh_public_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... chess-deploy"
 
@@ -209,6 +212,7 @@ elixir_version = "1.17.3-otp-27"
 | Variable | Description | Where to find it |
 |---|---|---|
 | `aws_region` | AWS region for all resources | The region you chose in Section 2.2 |
+| `availability_zone` | Availability zone within the region | Choose from your region's AZs (e.g., `us-east-1a`). If you get "instance type not supported" errors, try a different AZ |
 | `ssh_public_key` | SSH public key for instance access | `cat ~/.ssh/chess_deploy.pub` |
 | `instance_type` | EC2 instance type | Default: `t3.small`. Use `t2.micro` for free tier |
 | `root_volume_size_gb` | EBS root volume size | Default: `20` GB |
@@ -388,18 +392,25 @@ mix phx.gen.secret
 
 > **Note:** `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` are set once in Section 3.4 and persist across infrastructure rebuilds — they do NOT come from Terraform outputs.
 
-### 7.2 Set branch protection on `main`
+### 7.2 Set branch protection on `master`
 
-Enforce that all merges to `main` pass quality checks before deployment.
+Enforce that all merges to `master` pass quality checks before deployment.
 
 1. Go to **Settings → Branches** → **Add rule**
-2. Branch name pattern: `main`
+2. Branch name pattern: `master`
 3. Enable these settings:
    - ✓ Require a pull request before merging
    - ✓ Require status checks to pass before merging
    - Under "Status checks that are required", select: `quality`
-   - ✓ Require branches to be up to date before merging (recommended)
+   - ✓ Dismiss stale pull request approvals when new commits are pushed
+   - ✓ Require branches to be up to date before merging
 4. Click **"Create"**
+
+This configuration ensures that:
+- No one can merge directly to `master` without a pull request
+- The `quality` check must pass before a PR can be merged
+- GitHub will not allow merge until all status checks are passing
+- Force push is disabled, protecting against accidental overrides
 
 ### 7.3 Test the CI/CD pipeline
 
@@ -454,14 +465,15 @@ aws s3 cp s3://chess-releases/current.json - | jq .
 
 The `.github/workflows/deploy.yml` workflow has two jobs:
 
-**`quality` job** (runs on every push to `main`):
+**`quality` job** (runs on every push to `master` and when PR moves from draft to ready):
 - Checks out code
 - Sets up Erlang 27.0 and Elixir 1.17.0
 - Caches dependencies and build artifacts
 - Runs `mix quality` (Credo strict + Dialyzer + ExUnit tests)
+- **Skipped for draft PRs** — allows early commits without blocking quality checks
 - Fails the build if any check fails
 
-**`deploy` job** (runs only after `quality` passes):
+**`deploy` job** (runs only after `quality` passes and PR is merged):
 - Checks out code
 - Sets up Erlang 27.0 and Elixir 1.17.0
 - Builds assets with `mix assets.deploy`
@@ -471,7 +483,27 @@ The `.github/workflows/deploy.yml` workflow has two jobs:
 - Uploads archive to `s3://chess-releases/`
 - Generates and uploads `current.json` with version and download URL
 
-### 7.5 Troubleshooting CI/CD failures
+**Draft PR behavior:**
+- When you create a PR as a draft, the `quality` job is skipped
+- When you change the PR from draft to ready, the `quality` job runs automatically
+- This allows you to push work-in-progress commits without triggering expensive builds
+- The branch protection rule prevents merging until `quality` passes
+
+### 7.5 Draft PR behavior
+
+When you create a pull request as a **draft**:
+- The `quality` job is automatically skipped
+- No expensive builds are triggered until you're ready
+- You can push work-in-progress code without blocking on quality checks
+
+When you mark the PR as **ready for review**:
+- The `quality` job runs automatically
+- The pipeline is triggered as if the PR was just opened
+- You must wait for `quality` to pass before merging
+
+**Note:** Draft PRs cannot be merged even if they pass all checks — the branch protection rule requires the PR to be ready for review.
+
+### 7.6 Troubleshooting CI/CD failures
 
 **quality job fails**
 
@@ -484,6 +516,19 @@ Common causes:
 - **Credo violations**: `credo --strict` found style issues. Fix and push again.
 - **Dialyzer errors**: Type checking found issues. Review and fix.
 - **Test failures**: Unit tests failed. Fix and push again.
+
+**Pipeline didn't trigger when I moved PR from draft to ready**
+
+When you change a PR from draft to ready, GitHub sends a `ready_for_review` event. The workflow is configured to trigger on this event. If the pipeline didn't run:
+
+1. Check the **Actions** tab in your GitHub repository
+2. Look for a workflow run with your commit hash
+3. If no run appears, verify the workflow file includes `ready_for_review`:
+   ```yaml
+   on:
+     pull_request:
+       types: [opened, synchronize, ready_for_review]
+   ```
 
 **deploy job fails**
 
@@ -521,6 +566,41 @@ A key pair named `chess-deploy` already exists in your AWS account for this regi
 ```bash
 terraform import aws_key_pair.chess chess-deploy
 ```
+
+### "Your requested instance type is not supported in your requested Availability Zone"
+
+This error occurs when the `t3.small` (or your chosen instance type) is not available in the specified availability zone.
+
+**Solution:**
+
+1. Edit `terraform.tfvars` and change the `availability_zone`:
+   ```bash
+   availability_zone = "us-east-1b"  # Try a different AZ
+   ```
+
+2. Destroy the current infrastructure (if it exists):
+   ```bash
+   cd infra/terraform/
+   terraform destroy  # Type 'yes' when prompted
+   ```
+
+3. Apply again:
+   ```bash
+   terraform plan
+   terraform apply
+   ```
+
+If the error persists, try other availability zones in your region:
+- For `us-east-1`: try `us-east-1a`, `us-east-1b`, `us-east-1c`, `us-east-1d`, or `us-east-1f`
+- For other regions: check AWS Console → EC2 → Instances to see which AZs are active
+
+Alternatively, use a different instance type that may be more widely available:
+```hcl
+instance_type = "t2.micro"  # Free tier eligible (slower Erlang compile)
+instance_type = "t3.medium" # More resources, different availability
+```
+
+---
 
 ### SSH "Connection refused" after apply
 
