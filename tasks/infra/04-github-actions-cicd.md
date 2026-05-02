@@ -5,36 +5,42 @@
 
 ## Goal
 
-Implement the automated CI/CD pipeline that runs quality checks on every push to `main` and, on success, builds an OTP release, uploads it to AWS S3, and updates `current.json`. Once this task is complete, every merge to `main` automatically triggers a deployment without manual intervention.
+Implement the automated CI/CD pipeline that runs quality checks on every pull request to `master` and, on success, builds an OTP release on push to `master`, uploads it to AWS S3, and updates `current.json`. Once this task is complete, every merge to `master` automatically triggers a deployment without manual intervention.
 
 ## Checklist
 
-- [x] Create `.github/workflows/deploy.yml` with `quality` and `deploy` jobs
-- [x] Implement the `quality` job (lint + tests + type checks)
+- [x] Create `.github/workflows/quality.yml` for pull requests (lint + tests + type checks)
+- [x] Create `.github/workflows/deploy.yml` for production deployment on `master` push
+- [x] Implement the `quality` job (runs on PRs, skips draft PRs)
 - [x] Implement the `deploy` job (build release, archive, upload to S3, update `current.json`)
-- [x] Add dependency caching (deps/ and _build/)
+- [x] Add dependency caching (deps/ and _build/) to both workflows
 - [x] Add `SECRET_KEY_BASE` as a GitHub Actions secret
-- [x] Set branch protection on `main` (require `quality` status check)
-- [x] Test the pipeline with a push to `main` and verify all steps
+- [x] Configure `mix quality` alias in mix.exs (credo + dialyzer + test)
+- [x] Set branch protection on `master` (require `quality` status check from PRs)
+- [x] Test the pipeline with pull requests and pushes to `master`
 
 ## Implementation Steps
 
-### 1. Create the workflow file structure
+### 1. Create workflow files
 
-Create `.github/workflows/deploy.yml`:
+The pipeline is split into two workflows:
+
+#### `.github/workflows/quality.yml` (runs on pull requests)
 
 ```yaml
-name: Deploy
+name: Quality
 
 on:
-  push:
+  pull_request:
+    types: [opened, synchronize, ready_for_review]
     branches:
-      - main
+      - master
 
 jobs:
   quality:
     name: Quality
     runs-on: ubuntu-latest
+    if: github.event.pull_request.draft == false
     steps:
       - uses: actions/checkout@v4
 
@@ -62,11 +68,28 @@ jobs:
       - run: mix deps.get
 
       - run: mix quality
+```
 
+**Key features:**
+- Runs on PR `opened`, `synchronize`, and `ready_for_review` events
+- Skips draft PRs with `if: github.event.pull_request.draft == false`
+- Targets `master` branch
+- Uses caching for faster builds
+
+#### `.github/workflows/deploy.yml` (runs on push to master)
+
+```yaml
+name: Deploy
+
+on:
+  push:
+    branches:
+      - master
+
+jobs:
   deploy:
     name: Deploy
     runs-on: ubuntu-latest
-    needs: quality
     steps:
       - uses: actions/checkout@v4
 
@@ -126,95 +149,133 @@ jobs:
         run: aws s3 cp current.json s3://chess-releases/current.json
 ```
 
-### 2. Add GitHub Actions secrets
+**Key features:**
+- Runs automatically on every push to `master`
+- No explicit dependency on quality checks (use branch protection rules to enforce)
+- Builds, archives, and deploys the release to S3
 
-Set these secrets in your GitHub repository settings (Settings → Secrets and variables → Actions):
+### 2. GitHub Actions secrets (already configured)
 
-- `AWS_ACCESS_KEY_ID` — from Task 02
-- `AWS_SECRET_ACCESS_KEY` — from Task 02
-- `AWS_REGION` — AWS region where `chess-releases` bucket is located (e.g., `us-east-1`)
-- `SECRET_KEY_BASE` — Phoenix secret key, generated with:
-  ```bash
-  mix phx.gen.secret
-  ```
+The following secrets are already set in GitHub repository settings (Settings → Secrets and variables → Actions):
 
-### 3. Verify mix quality alias
+- ✓ `AWS_ACCESS_KEY_ID` — from Task 02
+- ✓ `AWS_SECRET_ACCESS_KEY` — from Task 02
+- ✓ `AWS_REGION` — AWS region where `chess-releases` bucket is located (e.g., `us-east-1`)
+- ✓ `SECRET_KEY_BASE` — Phoenix secret key
 
-Before running the pipeline, ensure `mix.exs` defines the `quality` alias. It should run Credo, Dialyzer, and ExUnit:
+### 3. Mix quality alias (already configured)
+
+The `mix.exs` file defines the `quality` alias that runs Credo, Dialyzer, and ExUnit:
 
 ```elixir
-def project do
+defp aliases do
   [
-    # ... existing config ...
-    aliases: [
-      quality: [
-        "credo --strict",
-        "dialyzer",
-        "test"
-      ]
-    ]
+    setup: ["deps.get", "assets.setup", "assets.build"],
+    "assets.setup": ["tailwind.install --if-missing", "esbuild.install --if-missing"],
+    "assets.build": ["tailwind chess", "esbuild chess"],
+    "assets.deploy": [
+      "tailwind chess --minify",
+      "esbuild chess --minify",
+      "phx.digest"
+    ],
+    quality: ["credo --strict", "dialyzer", "cmd MIX_ENV=test mix test"]
   ]
 end
 ```
+
+**Note:** The test command is explicitly run with `MIX_ENV=test` to ensure proper test environment configuration.
 
 Run locally to verify:
 ```bash
 mix quality
 ```
 
-### 4. Set branch protection on main
+### 4. Branch protection on master (already configured)
 
-In your GitHub repository settings:
+GitHub branch protection rules for `master` enforce:
 
-1. Go to Settings → Branches
-2. Under "Branch protection rules", click "Add rule"
-3. Branch name pattern: `main`
-4. Enable:
-   - ✓ Require a pull request before merging
-   - ✓ Require status checks to pass before merging
-   - Under "Status checks that are required", add: `quality`
-   - ✓ Require branches to be up to date before merging (optional but recommended)
+1. ✓ Require a pull request before merging
+2. ✓ Require status checks to pass before merging
+   - Require: `Quality` (from the `quality.yml` workflow)
+3. ✓ Require branches to be up to date before merging
+4. ✓ Dismiss stale PR approvals when new commits are pushed
+5. ✓ Delete branch after merge (recommended)
 
-### 5. Test the pipeline
+This ensures all PRs must pass quality checks before being merged to `master`.
 
-1. Create a test branch locally:
-   ```bash
-   git checkout -b test-pipeline
-   ```
+### 5. Pipeline workflow (currently active)
 
-2. Make a small test commit:
-   ```bash
-   echo "# Test" >> README.md
-   git add README.md
-   git commit -m "test: verify CI/CD pipeline"
-   ```
+The CI/CD pipeline operates in two stages:
 
-3. Push to `main`:
-   ```bash
-   git push origin test-pipeline:main
-   ```
+#### Pull Request Stage (Quality Workflow)
 
-4. Monitor the workflow:
-   - Go to Actions tab in GitHub
-   - Watch the `quality` job run first
-   - Once it passes, the `deploy` job should start automatically
-   - Verify that:
-     - ✓ `quality` job completes successfully
-     - ✓ `deploy` job runs after `quality` passes
-     - ✓ Release tar archive appears in S3: `s3://chess-releases/chess-<sha>.tar.gz`
-     - ✓ `current.json` is updated in S3 with the new version and URL
+1. Open a pull request against `master`
+2. The `quality.yml` workflow automatically runs:
+   - Checks out the code
+   - Sets up Erlang/Elixir environment (OTP 27, Elixir 1.17)
+   - Caches dependencies and build artifacts
+   - Runs `mix quality` (credo → dialyzer → tests)
+3. Must pass before merging to `master`
 
-5. Verify S3 contents:
-   ```bash
-   aws s3 ls s3://chess-releases/
-   aws s3 cp s3://chess-releases/current.json - | jq .
-   ```
+#### Master Push Stage (Deploy Workflow)
 
-## Notes / References
+1. When a PR is merged to `master`, the `deploy.yml` workflow starts:
+   - Checks out the code
+   - Sets up Erlang/Elixir environment
+   - Uses cached dependencies for faster builds
+   - Runs `mix assets.deploy` (minify Tailwind + esbuild + digest)
+   - Builds OTP release with `MIX_ENV=prod mix release`
+   - Archives the release as `chess-<sha>.tar.gz`
+   - Uploads to S3: `s3://chess-releases/chess-<sha>.tar.gz`
+   - Updates `current.json` with version and S3 URL
+2. Once complete, the latest release is immediately available for deployment
 
-- `erlef/setup-beam` action: https://github.com/erlef/setup-beam
-- `aws-actions/configure-aws-credentials` action: https://github.com/aws-actions/configure-aws-credentials
-- GitHub Actions documentation: https://docs.github.com/en/actions
-- The `mix quality` alias must be defined in `mix.exs` and run Credo strict + Dialyzer + ExUnit
-- OTP version in the workflow file must exactly match the `.tool-versions` file (must be OTP 27 and Elixir 1.17)
-- `SECRET_KEY_BASE` should never be committed — it is injected via GitHub Actions secrets at runtime
+#### Monitoring deployments
+
+View workflow status:
+```bash
+# List recent workflow runs
+gh run list --workflow=deploy.yml --limit=10
+
+# View specific run details
+gh run view <run-id>
+
+# View logs for a job
+gh run view <run-id> --log
+```
+
+Check S3 releases:
+```bash
+aws s3 ls s3://chess-releases/
+aws s3 cp s3://chess-releases/current.json - | jq .
+```
+
+## Status
+
+✅ **Complete** — The CI/CD pipeline is fully implemented and active.
+
+- Quality checks run automatically on all pull requests
+- Deployments run automatically on merges to `master`
+- Branch protection enforces passing quality checks before merge
+- Both workflows use caching for optimized build times
+
+## Architecture Decision Notes
+
+- **Separate workflow files**: Split `quality.yml` and `deploy.yml` for clarity and different trigger conditions
+- **Draft PR skipping**: Quality checks skip draft PRs to avoid unnecessary CI cost during development
+- **No explicit dependency**: `deploy.yml` has no `needs: quality` because GitHub branch protection rules enforce the requirement
+- **Master branch**: Updated from `main` to `master` per repository conventions
+
+## References
+
+- [erlef/setup-beam](https://github.com/erlef/setup-beam) — Erlang/Elixir environment setup
+- [aws-actions/configure-aws-credentials](https://github.com/aws-actions/configure-aws-credentials) — AWS credential configuration
+- [GitHub Actions documentation](https://docs.github.com/en/actions)
+- [GitHub CLI](https://cli.github.com/) — for monitoring workflows locally
+
+## Important Notes
+
+- OTP version (27.0) and Elixir version (1.17.0) must match `.tool-versions`
+- `SECRET_KEY_BASE` is injected at runtime via GitHub Actions secrets — never commit it
+- Cache keys include `mix.lock` hash to invalidate on dependency changes
+- Deployment requires AWS credentials with S3 write permissions to `chess-releases` bucket
