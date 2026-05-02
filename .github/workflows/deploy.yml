@@ -17,13 +17,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Extract versions from .tool-versions
+      - name: Extract versions from .tool-versions and AWS account ID
         id: versions
         run: |
           erlang_version=$(grep 'erlang' .tool-versions | awk '{print $2}')
           elixir_version=$(grep 'elixir' .tool-versions | awk '{print $2}')
+          aws_account_id=$(aws sts get-caller-identity --query Account --output text)
           echo "erlang=$erlang_version" >> $GITHUB_OUTPUT
           echo "elixir=$elixir_version" >> $GITHUB_OUTPUT
+          echo "aws_account_id=$aws_account_id" >> $GITHUB_OUTPUT
 
       - uses: erlef/setup-beam@v1
         with:
@@ -66,16 +68,16 @@ jobs:
           aws-region: ${{ secrets.AWS_REGION }}
 
       - name: Upload release to S3
-        run: aws s3 cp chess-${{ github.sha }}.tar.gz s3://chess-releases/chess-${{ github.sha }}.tar.gz
+        run: aws s3 cp chess-${{ github.sha }}.tar.gz s3://chess-releases-${{ steps.versions.outputs.aws_account_id }}/chess-${{ github.sha }}.tar.gz
 
       - name: Generate current.json
         run: |
           cat > current.json <<EOF
           {
             "version": "${{ github.sha }}",
-            "url": "https://chess-releases.s3.${{ secrets.AWS_REGION }}.amazonaws.com/chess-${{ github.sha }}.tar.gz"
+            "url": "https://chess-releases-${{ steps.versions.outputs.aws_account_id }}.s3.${{ secrets.AWS_REGION }}.amazonaws.com/chess-${{ github.sha }}.tar.gz"
           }
           EOF
 
       - name: Upload current.json to S3
-        run: aws s3 cp current.json s3://chess-releases/current.json
+        run: aws s3 cp current.json s3://chess-releases-${{ steps.versions.outputs.aws_account_id }}/current.json
