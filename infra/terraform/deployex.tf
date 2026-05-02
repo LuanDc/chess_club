@@ -22,10 +22,8 @@ variable "release_cookie" {
 # AWS region variable (var.aws_region) is already defined in variables.tf
 
 # Render the systemd service file for DeployEx
-data "template_file" "deployex_service" {
-  template = file("${path.module}/deployex.service.tpl")
-
-  vars = {
+locals {
+  deployex_service_content = templatefile("${path.module}/deployex.service.tpl", {
     deployex_home              = "/opt/deployex"
     deployex_admin_hash        = var.deployex_admin_password_hash
     release_node               = "deployex@${aws_instance.chess_server.private_ip}"
@@ -34,7 +32,7 @@ data "template_file" "deployex_service" {
     deployex_storage_adapter   = "s3"
     aws_region                 = var.aws_region
     s3_bucket                  = aws_s3_bucket.chess_releases.id
-  }
+  })
 }
 
 # Create the systemd service file on the EC2 instance
@@ -69,7 +67,7 @@ resource "aws_ssm_document" "deployex_setup" {
             "",
             "# Write systemd service file",
             "sudo tee /etc/systemd/system/deployex.service > /dev/null << 'SYSTEMD'",
-            data.template_file.deployex_service.rendered,
+            local.deployex_service_content,
             "SYSTEMD",
             "",
             "# Enable and start the service",
@@ -87,12 +85,11 @@ resource "aws_ssm_document" "deployex_setup" {
   })
 }
 
-# Invoke the DeployEx setup on the EC2 instance
-resource "aws_ssm_command" "deployex_setup" {
-  document_name       = aws_ssm_document.deployex_setup.name
-  instance_ids        = [aws_instance.chess_server.id]
-  service_role_arn    = aws_iam_role.ssm_role.arn
-  comment             = "Install and configure DeployEx"
+# Invoke the DeployEx setup on the EC2 instance via AWS CLI
+resource "null_resource" "deployex_setup" {
+  provisioner "local-exec" {
+    command = "aws ssm send-command --document-name ${aws_ssm_document.deployex_setup.name} --instance-ids ${aws_instance.chess_server.id} --service-role-arn ${aws_iam_role.ssm_role.arn} --region ${var.aws_region}"
+  }
 
   depends_on = [
     aws_instance.chess_server,
