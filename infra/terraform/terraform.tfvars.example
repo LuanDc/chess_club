@@ -23,6 +23,3 @@ deployex_admin_password_hash = "$2b$10$YourBcryptHashHere..."
 # Generate random cookie: openssl rand -base64 32
 # Must match chess app's RELEASE_COOKIE environment variable
 release_cookie = "YourSecureRandomCookieHere..."
-
-# S3 bucket name from Task 02 (or construct: chess-releases-{aws-account-id})
-s3_bucket_name = "chess-releases-123456789012"
