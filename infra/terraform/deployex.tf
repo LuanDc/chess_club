@@ -35,6 +35,13 @@ locals {
   })
 }
 
+# Upload systemd service file to S3
+resource "aws_s3_object" "deployex_service" {
+  bucket  = aws_s3_bucket.chess_releases.id
+  key     = "deployex.service"
+  content = local.deployex_service_content
+}
+
 # Create the systemd service file on the EC2 instance
 resource "aws_ssm_document" "deployex_setup" {
   name            = "deployex-setup"
@@ -58,15 +65,17 @@ resource "aws_ssm_document" "deployex_setup" {
             "sudo chown -R deploy:deploy /opt/deployex",
             "",
             "# Download DeployEx binary (OTP 27)",
-            "DEPLOYEX_VERSION=0.8.0  # Update to match your DeployEx version",
+            "DEPLOYEX_VERSION=0.8.0",
             "DEPLOYEX_URL=\"https://github.com/thiagoesteves/deployex/releases/download/v$${DEPLOYEX_VERSION}/deployex-$${DEPLOYEX_VERSION}-otp-27-x86_64-linux.tar.gz\"",
             "cd /tmp && curl -L -o deployex.tar.gz \"$${DEPLOYEX_URL}\"",
             "tar -xzf deployex.tar.gz -C /tmp",
             "sudo cp /tmp/deployex /usr/local/bin/deployex",
             "sudo chmod +x /usr/local/bin/deployex",
             "",
-            "# Write systemd service file",
-            "echo '${base64encode(local.deployex_service_content)}' | base64 -d | sudo tee /etc/systemd/system/deployex.service > /dev/null",
+            "# Download systemd service file from S3",
+            "aws s3 cp s3://${aws_s3_bucket.chess_releases.id}/deployex.service /tmp/deployex.service --region ${var.aws_region}",
+            "sudo cp /tmp/deployex.service /etc/systemd/system/deployex.service",
+            "sudo chmod 644 /etc/systemd/system/deployex.service",
             "",
             "# Enable and start the service",
             "sudo systemctl daemon-reload",
@@ -81,6 +90,8 @@ resource "aws_ssm_document" "deployex_setup" {
       }
     ]
   })
+
+  depends_on = [aws_s3_object.deployex_service]
 }
 
 # Invoke the DeployEx setup on the EC2 instance via AWS CLI
