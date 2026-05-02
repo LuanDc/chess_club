@@ -137,6 +137,48 @@ You should see your account ID and the `terraform-chess` user ARN.
 
 ---
 
+## 3.4 Create the GitHub Actions IAM User (one-time)
+
+The GitHub Actions CI/CD pipeline requires an IAM user with S3 bucket access. This user is created once and persists across infrastructure rebuilds — Terraform manages only its permissions, not the user itself.
+
+### 3.4.1 Create the IAM User
+
+1. Go to **AWS Console** → **IAM** → **Users** → **Create user**
+2. User name: `github-actions-chess`
+3. On the permissions step, select **"Attach policies directly"** and click **Next** (we'll attach the policy via Terraform)
+4. Complete the wizard
+5. You will see: "User `github-actions-chess` created successfully"
+
+### 3.4.2 Create Access Keys for CLI
+
+1. Click the newly created user → **Security credentials** tab
+2. Under "Access keys", click **Create access key**
+3. Choose **Command Line Interface (CLI)** as the use case
+4. Click **Create access key**
+5. **IMPORTANT**: Copy the **Access Key ID** and **Secret Access Key** — the secret is only shown once
+
+Expected format:
+```
+Access Key ID: AKIA...
+Secret Access Key: wJalr...
+```
+
+### 3.4.3 Store credentials in GitHub Secrets
+
+Credentials are retrieved from Section 3.4.2, not Terraform.
+
+1. Go to your GitHub repository: **Settings → Secrets and variables → Actions**
+2. Click **New repository secret** and add:
+
+| Secret Name | Value |
+|---|---|
+| `AWS_ACCESS_KEY_ID` | From step 3.4.2 |
+| `AWS_SECRET_ACCESS_KEY` | From step 3.4.2 |
+
+Save these immediately — the secret key cannot be retrieved later from AWS Console.
+
+---
+
 ## 4. Configure terraform.tfvars
 
 All Terraform commands are run from the `infra/terraform/` directory.
@@ -325,24 +367,26 @@ Once your EC2 instance is provisioned and cloud-init is complete, configure GitH
 
 ### 7.1 Add GitHub Actions Secrets
 
-GitHub Actions needs AWS credentials and a secret key to build and deploy the application.
+GitHub Actions needs AWS credentials and a secret key to build and deploy the application. AWS credentials were already stored in Section 3.4.
 
 1. Go to your GitHub repository settings: **Settings → Secrets and variables → Actions**
-2. Create these secrets:
+2. Click **"New repository secret"** and add:
 
 | Secret Name | Value | Where to find it |
 |---|---|---|
-| `AWS_ACCESS_KEY_ID` | Your IAM access key | AWS Console → IAM → Users → (your user) → Security credentials |
-| `AWS_SECRET_ACCESS_KEY` | Your IAM secret key | AWS Console → IAM → Users → (your user) → Security credentials |
-| `AWS_REGION` | AWS region for S3 bucket (e.g., `us-east-1`) | The region chosen in Section 2.2 |
+| `AWS_ACCESS_KEY_ID` | From Section 3.4.2 | Saved when creating IAM user access keys (one-time) |
+| `AWS_SECRET_ACCESS_KEY` | From Section 3.4.2 | Saved when creating IAM user access keys (one-time) |
+| `AWS_REGION` | AWS region for S3 bucket (e.g., `us-east-1`) | From `terraform output s3_bucket_region` or Section 2.2 |
 | `SECRET_KEY_BASE` | Phoenix secret key | Generate with: `mix phx.gen.secret` |
 
-For the `SECRET_KEY_BASE`, generate it locally:
+To generate the `SECRET_KEY_BASE`, run locally:
 ```bash
 cd /path/to/chess
 mix phx.gen.secret
 # Copy the output and paste it as the secret value
 ```
+
+> **Note:** `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` are set once in Section 3.4 and persist across infrastructure rebuilds — they do NOT come from Terraform outputs.
 
 ### 7.2 Set branch protection on `main`
 
@@ -617,6 +661,43 @@ iex --version >> /home/deploy/version-check.txt
 cat /home/deploy/version-check.txt
 ```
 
+### Migrating from Terraform-managed IAM user to manual user (existing deployments)
+
+If you previously deployed with Terraform creating the `github-actions-chess` IAM user, migrate to the new one-time setup to decouple user creation from infrastructure rebuild:
+
+1. **Save current credentials** (if you don't have them stored safely):
+   ```bash
+   cd infra/terraform/
+   terraform output github_actions_access_key_id
+   terraform output github_actions_secret_access_key
+   ```
+
+2. **Ensure GitHub Secrets are populated** with the credentials from step 1 (Section 3.4.3)
+
+3. **Remove user and key from Terraform state** (this does NOT delete them from AWS):
+   ```bash
+   cd infra/terraform/
+   terraform state rm aws_iam_user.github_actions
+   terraform state rm aws_iam_access_key.github_actions
+   ```
+
+4. **Apply the new Terraform configuration**:
+   ```bash
+   cd infra/terraform/
+   terraform plan
+   terraform apply
+   ```
+   
+   Terraform will now show only the policy resource (`aws_iam_user_policy.github_actions_s3_policy`), not the user or key. The existing user and keys in AWS are unaffected.
+
+5. **Verify** that `terraform output` no longer shows credential outputs:
+   ```bash
+   terraform output
+   # Should NOT list github_actions_access_key_id or github_actions_secret_access_key
+   ```
+
+---
+
 ### Destroying and recreating the infrastructure
 
 ```bash
@@ -624,4 +705,4 @@ cat /home/deploy/version-check.txt
 terraform destroy
 ```
 
-Type `yes` when prompted. This removes all resources (EC2 instance, VPC, subnet, security group, internet gateway, key pair). The local `terraform.tfstate` is preserved so you can re-run `terraform apply` to recreate everything. Note that a new public IP address will be assigned.
+Type `yes` when prompted. This removes all resources (EC2 instance, VPC, subnet, security group, internet gateway, key pair). The `github-actions-chess` IAM user and its access keys **will persist** — they are no longer managed by Terraform. The local `terraform.tfstate` is preserved so you can re-run `terraform apply` to recreate the infrastructure. Note that a new public IP address will be assigned.

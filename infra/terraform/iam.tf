@@ -42,15 +42,15 @@ resource "aws_iam_instance_profile" "ec2_chess_profile" {
   role = aws_iam_role.ec2_chess_role.name
 }
 
-# GitHub Actions IAM User
-resource "aws_iam_user" "github_actions" {
-  name = "github-actions-chess"
+# GitHub Actions IAM User (must be created manually via AWS Console one-time)
+data "aws_iam_user" "github_actions" {
+  user_name = "github-actions-chess"
 }
 
 # GitHub Actions IAM Policy for S3 access
 resource "aws_iam_user_policy" "github_actions_s3_policy" {
   name = "github-actions-chess-s3-policy"
-  user = aws_iam_user.github_actions.name
+  user = data.aws_iam_user.github_actions.user_name
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -67,9 +67,4 @@ resource "aws_iam_user_policy" "github_actions_s3_policy" {
       ]
     }]
   })
-}
-
-# GitHub Actions Access Keys
-resource "aws_iam_access_key" "github_actions" {
-  user = aws_iam_user.github_actions.name
 }

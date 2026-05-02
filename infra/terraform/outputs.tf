@@ -47,15 +47,3 @@ output "ec2_instance_profile_name" {
   value       = aws_iam_instance_profile.ec2_chess_profile.name
   description = "Instance Profile name for EC2"
 }
-
-output "github_actions_access_key_id" {
-  value       = aws_iam_access_key.github_actions.id
-  sensitive   = true
-  description = "AWS Access Key ID for GitHub Actions"
-}
-
-output "github_actions_secret_access_key" {
-  value       = aws_iam_access_key.github_actions.secret
-  sensitive   = true
-  description = "AWS Secret Access Key for GitHub Actions"
-}
