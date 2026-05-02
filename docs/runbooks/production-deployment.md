@@ -10,7 +10,8 @@ This guide takes you from zero — no AWS account, no local tooling — to a ful
 4. [Configure terraform.tfvars](#4-configure-terraformtfvars)
 5. [Run Terraform](#5-run-terraform)
 6. [Verify cloud-init Completion](#6-verify-cloud-init-completion)
-7. [Troubleshooting](#7-troubleshooting)
+7. [GitHub Actions CI/CD Setup](#7-github-actions-cicd-setup)
+8. [Troubleshooting](#8-troubleshooting)
 
 ---
 
@@ -318,7 +319,146 @@ At this point the server is ready to receive the application.
 
 ---
 
-## 7. Troubleshooting
+## 7. GitHub Actions CI/CD Setup
+
+Once your EC2 instance is provisioned and cloud-init is complete, configure GitHub Actions to automate builds and deployments on every push to `main`.
+
+### 7.1 Add GitHub Actions Secrets
+
+GitHub Actions needs AWS credentials and a secret key to build and deploy the application.
+
+1. Go to your GitHub repository settings: **Settings → Secrets and variables → Actions**
+2. Create these secrets:
+
+| Secret Name | Value | Where to find it |
+|---|---|---|
+| `AWS_ACCESS_KEY_ID` | Your IAM access key | AWS Console → IAM → Users → (your user) → Security credentials |
+| `AWS_SECRET_ACCESS_KEY` | Your IAM secret key | AWS Console → IAM → Users → (your user) → Security credentials |
+| `AWS_REGION` | AWS region for S3 bucket (e.g., `us-east-1`) | The region chosen in Section 2.2 |
+| `SECRET_KEY_BASE` | Phoenix secret key | Generate with: `mix phx.gen.secret` |
+
+For the `SECRET_KEY_BASE`, generate it locally:
+```bash
+cd /path/to/chess
+mix phx.gen.secret
+# Copy the output and paste it as the secret value
+```
+
+### 7.2 Set branch protection on `main`
+
+Enforce that all merges to `main` pass quality checks before deployment.
+
+1. Go to **Settings → Branches** → **Add rule**
+2. Branch name pattern: `main`
+3. Enable these settings:
+   - ✓ Require a pull request before merging
+   - ✓ Require status checks to pass before merging
+   - Under "Status checks that are required", select: `quality`
+   - ✓ Require branches to be up to date before merging (recommended)
+4. Click **"Create"**
+
+### 7.3 Test the CI/CD pipeline
+
+Before merging real changes, verify the pipeline works end-to-end.
+
+**Step 1: Create a test commit**
+```bash
+# Create a test branch
+git checkout -b test-pipeline
+
+# Make a small test change
+echo "# Deployment test" >> README.md
+git add README.md
+git commit -m "test: verify CI/CD pipeline"
+```
+
+**Step 2: Trigger the workflow**
+```bash
+# Push to main to trigger the pipeline
+git push origin test-pipeline:main
+```
+
+**Step 3: Monitor in GitHub**
+
+1. Go to your repository → **Actions** tab
+2. Watch the workflow run:
+   - `quality` job runs first (lint, tests, type checks)
+   - Once `quality` passes, `deploy` job runs automatically
+   - Deploy job:
+     - Builds OTP release
+     - Archives to `chess-<sha>.tar.gz`
+     - Uploads to S3 bucket
+     - Updates `current.json` with new version and URL
+
+**Step 4: Verify artifacts in S3**
+
+```bash
+# List all releases in S3
+aws s3 ls s3://chess-releases/
+
+# Check the current.json file
+aws s3 cp s3://chess-releases/current.json - | jq .
+
+# Expected output:
+# {
+#   "version": "abc123def...",
+#   "url": "https://chess-releases.s3.us-east-1.amazonaws.com/chess-abc123def....tar.gz"
+# }
+```
+
+### 7.4 What the CI/CD pipeline does
+
+The `.github/workflows/deploy.yml` workflow has two jobs:
+
+**`quality` job** (runs on every push to `main`):
+- Checks out code
+- Sets up Erlang 27.0 and Elixir 1.17.0
+- Caches dependencies and build artifacts
+- Runs `mix quality` (Credo strict + Dialyzer + ExUnit tests)
+- Fails the build if any check fails
+
+**`deploy` job** (runs only after `quality` passes):
+- Checks out code
+- Sets up Erlang 27.0 and Elixir 1.17.0
+- Builds assets with `mix assets.deploy`
+- Builds OTP release with `MIX_ENV=prod mix release`
+- Archives release as `chess-<git-sha>.tar.gz`
+- Configures AWS credentials from secrets
+- Uploads archive to `s3://chess-releases/`
+- Generates and uploads `current.json` with version and download URL
+
+### 7.5 Troubleshooting CI/CD failures
+
+**quality job fails**
+
+Check the workflow run logs:
+1. Go to **Actions** → click the failed workflow
+2. Click the `quality` job → expand **"Run mix quality"** step
+3. Review the error output
+
+Common causes:
+- **Credo violations**: `credo --strict` found style issues. Fix and push again.
+- **Dialyzer errors**: Type checking found issues. Review and fix.
+- **Test failures**: Unit tests failed. Fix and push again.
+
+**deploy job fails**
+
+Check the workflow run logs similarly. Common causes:
+- **AWS credentials invalid**: Verify `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` in GitHub Secrets
+- **S3 bucket doesn't exist**: Ensure `chess-releases` S3 bucket exists and is accessible to your IAM user
+- **SECRET_KEY_BASE missing or invalid**: Regenerate with `mix phx.gen.secret` and update the secret
+- **Mix release build fails**: Check the "Build OTP release" step output
+
+**Slow pipeline**
+
+- First run caches build artifacts. Subsequent runs should be faster.
+- Erlang/Elixir setup takes ~1 minute
+- Assets deploy and release build take ~3-5 minutes total
+- S3 upload is usually < 30 seconds
+
+---
+
+## 8. Troubleshooting
 
 ### "Error: configuring Terraform AWS Provider: no valid credential sources found"
 
