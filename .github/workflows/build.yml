@@ -1,4 +1,4 @@
-name: Deploy
+name: Build
 
 on:
   push:
@@ -10,8 +10,8 @@ jobs:
     name: Quality
     uses: ./.github/workflows/quality.yml
 
-  deploy:
-    name: Deploy
+  build:
+    name: Build
     runs-on: ubuntu-latest
     needs: quality
     steps:
