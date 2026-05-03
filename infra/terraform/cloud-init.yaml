@@ -52,7 +52,7 @@ runcmd:
   - su - deploy -c 'echo ". \"$HOME/.asdf/asdf.sh\""           >> ~/.bashrc'
   - su - deploy -c 'echo ". \"$HOME/.asdf/completions/asdf.bash\"" >> ~/.bashrc'
 
-  # Create tool-versions file (pinned versions must agree with DeployEx Task 05)
+  # Create tool-versions file
   - su - deploy -c "cat > ~/.tool-versions << 'EOF'
 erlang ${erlang_version}
 elixir ${elixir_version}

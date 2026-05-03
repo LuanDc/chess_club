@@ -70,14 +70,3 @@ jobs:
       - name: Upload release to S3
         run: aws s3 cp chess-${{ github.sha }}.tar.gz s3://chess-releases-${{ steps.versions.outputs.aws_account_id }}/chess-${{ github.sha }}.tar.gz
 
-      - name: Generate current.json
-        run: |
-          cat > current.json <<EOF
-          {
-            "version": "${{ github.sha }}",
-            "url": "https://chess-releases-${{ steps.versions.outputs.aws_account_id }}.s3.${{ secrets.AWS_REGION }}.amazonaws.com/chess-${{ github.sha }}.tar.gz"
-          }
-          EOF
-
-      - name: Upload current.json to S3
-        run: aws s3 cp current.json s3://chess-releases-${{ steps.versions.outputs.aws_account_id }}/current.json

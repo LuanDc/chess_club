@@ -40,7 +40,7 @@ variable "root_volume_size_gb" {
 }
 
 variable "erlang_version" {
-  description = "OTP/Erlang version to install via ASDF (must match DeployEx)"
+  description = "OTP/Erlang version to install via ASDF"
   type        = string
   default     = "27.3.4"
 }
