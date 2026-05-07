@@ -96,10 +96,7 @@ runcmd:
   - su - deploy -c 'echo ". \"$HOME/.asdf/completions/asdf.bash\"" >> ~/.bashrc'
 
   # Create tool-versions file
-  - su - deploy -c "cat > ~/.tool-versions << 'EOF'
-erlang ${erlang_version}
-elixir ${elixir_version}
-EOF"
+  - su - deploy -c "printf 'erlang ${erlang_version}\nelixir ${elixir_version}\n' > ~/.tool-versions"
 
   # Install ASDF plugins
   - su - deploy -c '. ~/.asdf/asdf.sh && asdf plugin add erlang https://github.com/asdf-vm/asdf-erlang.git'
