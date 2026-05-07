@@ -70,3 +70,49 @@ jobs:
       - name: Upload release to S3
         run: aws s3 cp chess-${{ github.sha }}.tar.gz s3://chess-releases-${{ steps.versions.outputs.aws_account_id }}/chess-${{ github.sha }}.tar.gz
 
+  deploy:
+    name: Deploy
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Setup SSH key
+        run: |
+          echo "${{ secrets.EC2_SSH_KEY }}" > /tmp/ec2_key
+          chmod 600 /tmp/ec2_key
+
+      - name: Write env file on EC2
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+        run: |
+          cat > /tmp/chess.env << EOF
+          SECRET_KEY_BASE=${{ secrets.SECRET_KEY_BASE }}
+          PHX_SERVER=true
+          PORT=80
+          PHX_HOST=$EC2_HOST
+          EOF
+          scp -o StrictHostKeyChecking=no -i /tmp/ec2_key \
+            /tmp/chess.env deploy@"$EC2_HOST":/home/deploy/.chess.env
+          ssh -o StrictHostKeyChecking=no -i /tmp/ec2_key deploy@"$EC2_HOST" \
+            chmod 600 /home/deploy/.chess.env
+
+      - name: Deploy release
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+        run: |
+          ssh -o StrictHostKeyChecking=no -i /tmp/ec2_key deploy@"$EC2_HOST" bash -s -- "${{ github.sha }}" << 'ENDSSH'
+          set -euo pipefail
+          SHA=$1
+          AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          BUCKET="chess-releases-$AWS_ACCOUNT_ID"
+          RELEASE_DIR="/home/deploy/releases/$SHA"
+
+          mkdir -p "$RELEASE_DIR"
+          aws s3 cp "s3://$BUCKET/chess-$SHA.tar.gz" "/tmp/chess-$SHA.tar.gz"
+          tar -xzf "/tmp/chess-$SHA.tar.gz" -C "$RELEASE_DIR" --strip-components=4
+          rm "/tmp/chess-$SHA.tar.gz"
+
+          ln -sfn "$RELEASE_DIR" /home/deploy/current
+
+          sudo systemctl enable chess
+          sudo systemctl restart chess
+          ENDSSH

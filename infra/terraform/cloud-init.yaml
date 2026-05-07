@@ -19,6 +19,42 @@ write_files:
       ChallengeResponseAuthentication no
       PermitRootLogin no
 
+  - path: /usr/local/bin/setup-deploy-ssh.sh
+    owner: root:root
+    permissions: "0755"
+    content: |
+      #!/bin/bash
+      mkdir -p /home/deploy/.ssh
+      cp /home/ubuntu/.ssh/authorized_keys /home/deploy/.ssh/authorized_keys
+      chown -R deploy:deploy /home/deploy/.ssh
+      chmod 700 /home/deploy/.ssh
+      chmod 600 /home/deploy/.ssh/authorized_keys
+
+  - path: /etc/systemd/system/chess.service
+    owner: root:root
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=Chess Game
+      After=network.target
+      ConditionPathExists=/home/deploy/current/bin/chess
+
+      [Service]
+      Type=simple
+      User=deploy
+      Group=deploy
+      WorkingDirectory=/home/deploy/current
+      EnvironmentFile=/home/deploy/.chess.env
+      ExecStart=/home/deploy/current/bin/chess foreground
+      ExecStop=/home/deploy/current/bin/chess stop
+      Restart=on-failure
+      RestartSec=5
+      AmbientCapabilities=CAP_NET_BIND_SERVICE
+
+      [Install]
+      WantedBy=multi-user.target
+
+
 # Install build dependencies required by asdf-erlang to compile OTP from source
 packages:
   - git
@@ -34,6 +70,7 @@ packages:
   - fop
   - libxml2-utils
   - libncurses-dev
+  - awscli
 
 package_update: true
 package_upgrade: true
@@ -46,6 +83,12 @@ runcmd:
 
   # Apply SSH hardening immediately
   - systemctl restart ssh
+
+  # Copy ubuntu's authorized_keys to deploy user (allows same SSH key for GitHub Actions)
+  - /usr/local/bin/setup-deploy-ssh.sh
+
+  # Reload systemd to pick up the chess.service unit
+  - systemctl daemon-reload
 
   # Install ASDF for the deploy user
   - su - deploy -c 'git clone https://github.com/asdf-vm/asdf.git ~/.asdf --branch v0.14.0'

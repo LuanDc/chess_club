@@ -202,7 +202,7 @@ availability_zone = "us-east-1a"
 # Full contents of your SSH public key
 ssh_public_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... chess-deploy"
 
-# Runtime versions — must stay in sync with DeployEx (Task 05)
+# Runtime versions — must match the versions compiled on the EC2 instance
 erlang_version = "27.3.4"
 elixir_version = "1.17.3-otp-27"
 ```
@@ -216,8 +216,8 @@ elixir_version = "1.17.3-otp-27"
 | `ssh_public_key` | SSH public key for instance access | `cat ~/.ssh/chess_deploy.pub` |
 | `instance_type` | EC2 instance type | Default: `t3.small`. Use `t2.micro` for free tier |
 | `root_volume_size_gb` | EBS root volume size | Default: `20` GB |
-| `erlang_version` | OTP version for cloud-init | Must match DeployEx (Task 05) |
-| `elixir_version` | Elixir version for cloud-init | Must match DeployEx (Task 05) |
+| `erlang_version` | OTP version for cloud-init | Must match `.tool-versions` in the repository |
+| `elixir_version` | Elixir version for cloud-init | Must match `.tool-versions` in the repository |
 
 ---
 
@@ -371,7 +371,7 @@ Once your EC2 instance is provisioned and cloud-init is complete, configure GitH
 
 ### 7.1 Add GitHub Actions Secrets
 
-GitHub Actions needs AWS credentials and a secret key to build and deploy the application. AWS credentials were already stored in Section 3.4.
+GitHub Actions needs AWS credentials, an SSH key, and a Phoenix secret key to build and deploy the application. AWS credentials were already stored in Section 3.4.
 
 1. Go to your GitHub repository settings: **Settings → Secrets and variables → Actions**
 2. Click **"New repository secret"** and add:
@@ -382,6 +382,8 @@ GitHub Actions needs AWS credentials and a secret key to build and deploy the ap
 | `AWS_SECRET_ACCESS_KEY` | From Section 3.4.2 | Saved when creating IAM user access keys (one-time) |
 | `AWS_REGION` | AWS region for S3 bucket (e.g., `us-east-1`) | From `terraform output s3_bucket_region` or Section 2.2 |
 | `SECRET_KEY_BASE` | Phoenix secret key | Generate with: `mix phx.gen.secret` |
+| `EC2_HOST` | Public IP of the EC2 instance | From `terraform output instance_public_ip` |
+| `EC2_SSH_KEY` | Private SSH key for the `deploy` user | Contents of the private key file (e.g. `cat ~/.ssh/chess_deploy`) |
 
 To generate the `SECRET_KEY_BASE`, run locally:
 ```bash
@@ -390,7 +392,13 @@ mix phx.gen.secret
 # Copy the output and paste it as the secret value
 ```
 
-> **Note:** `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` are set once in Section 3.4 and persist across infrastructure rebuilds — they do NOT come from Terraform outputs.
+To get the EC2 public IP:
+```bash
+cd infra/terraform
+terraform output instance_public_ip
+```
+
+> **Note:** `EC2_SSH_KEY` is the **private** key (the full contents of `~/.ssh/chess_deploy`, not the `.pub` file). The corresponding public key was already added to the instance via `ssh_public_key` in `terraform.tfvars` and is automatically copied to the `deploy` user by cloud-init.
 
 ### 7.2 Set branch protection on `master`
 
@@ -449,58 +457,59 @@ git push origin test-pipeline:main
 **Step 3: Monitor in GitHub**
 
 1. Go to your repository → **Actions** tab
-2. Watch the workflow run:
-   - `quality` job runs first (lint, tests, type checks)
-   - Once `quality` passes, `deploy` job runs automatically
-   - Deploy job:
-     - Builds OTP release
-     - Archives to `chess-<sha>.tar.gz`
-     - Uploads to S3 bucket
-     - Updates `current.json` with new version and URL
+2. Watch the workflow run — three sequential jobs:
+   - `quality` job: lint (Credo strict), type checks (Dialyzer), tests (ExUnit)
+   - `build` job: builds OTP release, archives to `chess-<sha>.tar.gz`, uploads to S3
+   - `deploy` job: SSHes into EC2, writes env file, runs `deploy.sh <sha>` which downloads from S3 and restarts via systemd
 
-**Step 4: Verify artifacts in S3**
-
-The S3 bucket name includes the AWS account ID for uniqueness: `chess-releases-<account-id>`. To verify artifacts:
+**Step 4: Verify the deployment**
 
 ```bash
-# Get your AWS account ID
+# Check the application is running on the EC2 instance
+ssh deploy@<EC2_HOST> sudo systemctl status chess
+
+# Verify the active release
+ssh deploy@<EC2_HOST> readlink /home/deploy/current
+
+# Check the app responds on port 80
+curl http://<EC2_HOST>/
+```
+
+To list all available releases in S3:
+```bash
 AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-
-# List all releases in S3
 aws s3 ls s3://chess-releases-${AWS_ACCOUNT_ID}/
-
-# Check the current.json file
-aws s3 cp s3://chess-releases-${AWS_ACCOUNT_ID}/current.json - | jq .
-
-# Expected output:
-# {
-#   "version": "abc123def...",
-#   "url": "https://chess-releases-<account-id>.s3.us-east-1.amazonaws.com/chess-abc123def....tar.gz"
-# }
 ```
 
 ### 7.4 What the CI/CD pipeline does
 
-The `.github/workflows/deploy.yml` workflow has two jobs:
+The `.github/workflows/build.yml` workflow has three sequential jobs:
 
 **`quality` job** (runs on every push to `master` and when PR moves from draft to ready):
 - Checks out code
-- Sets up Erlang 27.0 and Elixir 1.17.0
+- Sets up Erlang/Elixir from `.tool-versions`
 - Caches dependencies and build artifacts
 - Runs `mix quality` (Credo strict + Dialyzer + ExUnit tests)
 - **Skipped for draft PRs** — allows early commits without blocking quality checks
-- Fails the build if any check fails
+- Fails the pipeline if any check fails
 
-**`deploy` job** (runs only after `quality` passes):
+**`build` job** (runs only after `quality` passes):
 - Checks out code
 - Configures AWS credentials from GitHub secrets
 - Extracts Erlang/Elixir versions from `.tool-versions` and AWS account ID dynamically
-- Sets up Erlang and Elixir matching the extracted versions
 - Builds assets with `mix assets.deploy`
 - Builds OTP release with `MIX_ENV=prod mix release`
 - Archives release as `chess-<git-sha>.tar.gz`
-- Uploads archive to `s3://chess-releases-<account-id>/` (bucket name includes AWS account ID)
-- Generates and uploads `current.json` with version and download URL
+- Uploads archive to `s3://chess-releases-<account-id>/`
+
+**`deploy` job** (runs only after `build` passes):
+- Sets up the SSH key from `EC2_SSH_KEY` secret
+- Writes `/home/deploy/.chess.env` on the EC2 instance via SCP (`SECRET_KEY_BASE`, `PORT=80`, `PHX_HOST`, `PHX_SERVER=true`)
+- SSHes into the EC2 instance and runs `/home/deploy/deploy.sh <sha>`, which:
+  - Downloads `chess-<sha>.tar.gz` from S3 (using the EC2 IAM role — no extra credentials needed)
+  - Extracts the release to `/home/deploy/releases/<sha>/`
+  - Updates the `/home/deploy/current` symlink
+  - Runs `sudo systemctl restart chess`
 
 **Draft PR behavior:**
 - When you create a PR as a draft, the `quality` job is skipped
@@ -549,14 +558,24 @@ When you change a PR from draft to ready, GitHub sends a `ready_for_review` even
        types: [opened, synchronize, ready_for_review]
    ```
 
-**deploy job fails**
+**build job fails**
 
 Check the workflow run logs similarly. Common causes:
 - **AWS credentials invalid**: Verify `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` in GitHub Secrets
 - **S3 bucket doesn't exist or access denied**: Ensure `chess-releases-<account-id>` bucket exists and your IAM user can access it. The bucket name is generated dynamically using the AWS account ID.
 - **SECRET_KEY_BASE missing or invalid**: Regenerate with `mix phx.gen.secret` and update the secret
 - **Mix release build fails**: Check the "Build OTP release" step output
-- **aws sts get-caller-identity fails**: The AWS credentials may not have STS permissions. Ensure the GitHub Actions IAM user has the `sts:GetCallerIdentity` permission (usually included in standard AWS policies)
+- **aws sts get-caller-identity fails**: Ensure the GitHub Actions IAM user has `sts:GetCallerIdentity` permission
+
+**deploy job fails**
+
+Common causes:
+- **SSH connection refused**: Verify `EC2_HOST` is the correct public IP. Run `terraform output instance_public_ip` to confirm. If the IP changed (instance stopped/started), update the secret.
+- **Permission denied (publickey)**: The `EC2_SSH_KEY` secret may contain extra whitespace or be the public key instead of the private key. Paste the full private key including the `-----BEGIN ...-----` and `-----END ...-----` lines.
+- **deploy.sh: command not found**: cloud-init may not have completed. SSH into the instance and check `cloud-init status`.
+- **aws: command not found on EC2**: The `awscli` package should be installed by cloud-init. If using an instance provisioned before this was added to `cloud-init.yaml`, install manually: `sudo apt install -y awscli`.
+- **S3 download fails on EC2**: The EC2 IAM Instance Profile must have `s3:GetObject` permission on the bucket. Verify via `terraform output ec2_instance_profile_name` and check the attached policy in AWS Console.
+- **systemctl restart chess fails**: Check `sudo journalctl -u chess -n 50` on the instance for the error.
 
 **Slow pipeline**
 
@@ -564,6 +583,29 @@ Check the workflow run logs similarly. Common causes:
 - Erlang/Elixir setup takes ~1 minute
 - Assets deploy and release build take ~3-5 minutes total
 - S3 upload is usually < 30 seconds
+
+### Manual rollback
+
+If a deployment introduces a regression, roll back to any previous release without triggering a full pipeline run:
+
+```bash
+ssh deploy@<EC2_HOST>
+
+# List available releases (each directory is a git SHA)
+ls /home/deploy/releases/
+
+# Point current to the previous release
+ln -sfn /home/deploy/releases/<PREVIOUS_SHA> /home/deploy/current
+
+# Restart the service
+sudo systemctl restart chess
+
+# Verify
+sudo systemctl status chess
+curl http://localhost/
+```
+
+The active release is always `/home/deploy/current` (a symlink). Changing the symlink and restarting is the entire rollback procedure.
 
 ---
 
