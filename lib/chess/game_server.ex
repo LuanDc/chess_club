@@ -114,10 +114,14 @@ defmodule Chess.GameServer do
 
   def handle_call({:join, pid, nickname}, _from, state) do
     if GameSession.player?(state.session, nickname) do
+      was_pending? = Map.has_key?(state.pending_resigns, nickname)
+
       new_state =
         state
         |> register_connection(pid, nickname)
         |> cancel_pending_resign(nickname)
+
+      if was_pending?, do: broadcast_reconnect(new_state, nickname)
 
       {:reply, :ok, new_state}
     else
@@ -218,9 +222,28 @@ defmodule Chess.GameServer do
       state
     else
       state = cancel_pending_resign(state, nickname)
-      timer_ref = Process.send_after(self(), {:auto_resign, nickname}, grace_ms())
+      grace = grace_ms()
+      timer_ref = Process.send_after(self(), {:auto_resign, nickname}, grace)
+      deadline_ms = System.system_time(:millisecond) + grace
+      broadcast_disconnect(state, nickname, deadline_ms)
       %State{state | pending_resigns: Map.put(state.pending_resigns, nickname, timer_ref)}
     end
+  end
+
+  defp broadcast_disconnect(%State{session: session}, nickname, deadline_ms) do
+    Phoenix.PubSub.broadcast(
+      @pubsub,
+      "game:" <> session.game.room_id,
+      {:opponent_disconnected, nickname, deadline_ms}
+    )
+  end
+
+  defp broadcast_reconnect(%State{session: session}, nickname) do
+    Phoenix.PubSub.broadcast(
+      @pubsub,
+      "game:" <> session.game.room_id,
+      {:opponent_reconnected, nickname}
+    )
   end
 
   defp reconnected?(state, nickname), do: has_other_connection?(state, nickname)

@@ -154,6 +154,38 @@ defmodule Chess.GameServerTest do
       assert_receive {:game_state, %{status: {:winner, :black, :resign}}}, 200
     end
 
+    test "broadcasts :opponent_disconnected with deadline when player disconnects" do
+      %{room_id: room_id} = start_game()
+      pid = spawn_player()
+      :ok = Games.join(room_id, pid, "Alice")
+
+      before_ms = System.system_time(:millisecond)
+      Process.exit(pid, :kill)
+      assert_receive {:opponent_disconnected, "Alice", deadline_ms}, 200
+      assert is_integer(deadline_ms)
+      assert deadline_ms >= before_ms
+    end
+
+    test "does not broadcast :opponent_disconnected in solo mode" do
+      %{room_id: room_id} = start_game(mode: :solo, white: "Alice", black: "Alice")
+      pid = spawn_player()
+      :ok = Games.join(room_id, pid, "Alice")
+
+      Process.exit(pid, :kill)
+      refute_receive {:opponent_disconnected, _, _}, 50
+    end
+
+    test "does not broadcast :opponent_disconnected when player has another tab alive" do
+      %{room_id: room_id} = start_game()
+      pid1 = spawn_player()
+      pid2 = spawn_player()
+      :ok = Games.join(room_id, pid1, "Alice")
+      :ok = Games.join(room_id, pid2, "Alice")
+
+      Process.exit(pid1, :kill)
+      refute_receive {:opponent_disconnected, _, _}, 50
+    end
+
     test "reconnect within grace cancels auto-resign" do
       previous = Application.get_env(:chess, :resign_grace_ms)
       Application.put_env(:chess, :resign_grace_ms, 100)
@@ -170,6 +202,31 @@ defmodule Chess.GameServerTest do
       :ok = Games.join(room_id, pid2, "Alice")
 
       refute_receive {:game_state, %{status: {:winner, _, _}}}, 200
+    end
+
+    test "broadcasts :opponent_reconnected when player rejoins within grace" do
+      previous = Application.get_env(:chess, :resign_grace_ms)
+      Application.put_env(:chess, :resign_grace_ms, 500)
+      on_exit(fn -> Application.put_env(:chess, :resign_grace_ms, previous) end)
+
+      %{room_id: room_id} = start_game()
+      pid1 = spawn_player()
+      :ok = Games.join(room_id, pid1, "Alice")
+
+      Process.exit(pid1, :kill)
+      assert_receive {:opponent_disconnected, "Alice", _deadline_ms}, 200
+
+      pid2 = spawn_player()
+      :ok = Games.join(room_id, pid2, "Alice")
+      assert_receive {:opponent_reconnected, "Alice"}, 200
+    end
+
+    test "does not broadcast :opponent_reconnected on initial join" do
+      %{room_id: room_id} = start_game()
+      pid = spawn_player()
+      :ok = Games.join(room_id, pid, "Alice")
+
+      refute_receive {:opponent_reconnected, _}, 50
     end
 
     test "DOWN of solo player does not resign" do

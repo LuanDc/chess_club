@@ -305,6 +305,26 @@ defmodule ChessWeb.ChessComponents do
     """
   end
 
+  ## Disconnect banner ───────────────────────────────────────────────────
+
+  attr :nickname, :string, required: true
+  attr :seconds_left, :integer, required: true
+
+  def disconnect_banner(assigns) do
+    ~H"""
+    <div
+      role="status"
+      class="bg-yellow-50 border border-yellow-400 text-yellow-800 rounded-lg px-4 py-3 mb-2 flex items-center gap-3 animate-fade-up"
+    >
+      <span class="text-xl" aria-hidden="true">⚠</span>
+      <div class="flex-1 text-[14px] leading-snug">
+        <strong class="font-semibold">{@nickname}</strong>
+        se desconectou. Vitória automática em <strong class="font-mono">{@seconds_left}s</strong>.
+      </div>
+    </div>
+    """
+  end
+
   ## Solo badge ──────────────────────────────────────────────────────────
 
   def solo_badge(assigns) do

@@ -175,6 +175,56 @@ defmodule ChessWeb.GameLiveTest do
       assert bob_html =~ "Você venceu"
     end
 
+    test "shows yellow disconnect banner when opponent disconnects" do
+      previous = Application.get_env(:chess, :resign_grace_ms)
+      Application.put_env(:chess, :resign_grace_ms, 5_000)
+      on_exit(fn -> Application.put_env(:chess, :resign_grace_ms, previous) end)
+
+      Process.flag(:trap_exit, true)
+      room_id = start_multiplayer_game()
+      alice_conn = build_conn() |> Plug.Test.init_test_session(%{nickname: "Alice"})
+      bob_conn = build_conn() |> Plug.Test.init_test_session(%{nickname: "Bob"})
+
+      {:ok, alice_view, _} = live(alice_conn, ~p"/games/#{room_id}")
+      {:ok, bob_view, _} = live(bob_conn, ~p"/games/#{room_id}")
+
+      Process.exit(alice_view.pid, :kill)
+      Process.sleep(100)
+
+      bob_html = render(bob_view)
+      assert bob_html =~ "Alice"
+      assert bob_html =~ "desconectou"
+      assert bob_html =~ "Vitória automática"
+      assert bob_html =~ "bg-yellow-50"
+    end
+
+    test "banner disappears when opponent reconnects within grace" do
+      previous = Application.get_env(:chess, :resign_grace_ms)
+      Application.put_env(:chess, :resign_grace_ms, 10_000)
+      on_exit(fn -> Application.put_env(:chess, :resign_grace_ms, previous) end)
+
+      Process.flag(:trap_exit, true)
+      room_id = start_multiplayer_game()
+      alice_conn = build_conn() |> Plug.Test.init_test_session(%{nickname: "Alice"})
+      bob_conn = build_conn() |> Plug.Test.init_test_session(%{nickname: "Bob"})
+
+      {:ok, alice_view, _} = live(alice_conn, ~p"/games/#{room_id}")
+      {:ok, bob_view, _} = live(bob_conn, ~p"/games/#{room_id}")
+
+      Process.exit(alice_view.pid, :kill)
+      Process.sleep(100)
+      assert render(bob_view) =~ "desconectou"
+
+      {:ok, _alice_view2, _} = live(alice_conn, ~p"/games/#{room_id}")
+      Process.sleep(100)
+      refute render(bob_view) =~ "desconectou"
+    end
+
+    test "does not show disconnect banner in solo mode", %{conn: conn} do
+      {:ok, _view, html} = live(conn, ~p"/games/solo")
+      refute html =~ "desconectou"
+    end
+
     test "'Voltar ao Lobby' navigates to /lobby", %{conn: conn} do
       room_id = start_multiplayer_game()
       {:ok, view, _} = live(conn, ~p"/games/#{room_id}")
