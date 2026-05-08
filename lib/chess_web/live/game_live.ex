@@ -297,6 +297,7 @@ defmodule ChessWeb.GameLive do
       <div class="flex-1 flex flex-col items-stretch justify-center gap-6 p-4 min-[1100px]:flex-row min-[1100px]:items-start min-[1100px]:gap-12 min-[1100px]:p-12">
         <div class="flex flex-col flex-1 animate-fade-up">
           <.player_bar
+            :if={!@disconnected_player}
             position="top"
             name={top_name(@state, @my_color, @mode)}
             color_label={top_color_label(@my_color, @mode)}
