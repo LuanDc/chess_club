@@ -234,7 +234,7 @@ defmodule ChessWeb.GameLive do
         </:right>
       </.navbar>
 
-      <div class="flex-1 flex items-start justify-center gap-12 p-12 flex-row">
+      <div class="flex-1 flex flex-col items-stretch justify-center gap-6 p-4 min-[1100px]:flex-row min-[1100px]:items-start min-[1100px]:gap-12 min-[1100px]:p-12">
         <div class="flex flex-col flex-1 animate-fade-up">
           <.player_bar
             position="top"
@@ -260,7 +260,7 @@ defmodule ChessWeb.GameLive do
           />
         </div>
 
-        <div class="w-64 flex flex-col gap-3.5 pt-0 animate-fade-up">
+        <div class="w-full flex flex-col gap-3.5 pt-0 animate-fade-up min-[1100px]:w-64">
           <%= if game_over?(@state) do %>
             <.game_over_card message={game_over_message(@state, @nickname, @my_color, @mode)}>
               <.btn variant="primary" phx-click="back_to_lobby" class="w-full">
