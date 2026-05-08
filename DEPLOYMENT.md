@@ -1,98 +1,108 @@
-# Deployment no Fly.io
+# Deployment on Fly.io
 
-## Pré-requisitos
+## Prerequisites
 
-1. Conta no [Fly.io](https://fly.io)
-2. CLI do Fly.io instalada: `curl -L https://fly.io/install.sh | sh`
-3. Autenticação: `flyctl auth login`
+1. [Fly.io](https://fly.io) account
+2. Fly.io CLI installed: `curl -L https://fly.io/install.sh | sh`
+3. Authentication: `flyctl auth login`
 
-## Configuração
+## Configuration
 
-### 1. Criar a app no Fly.io
+### 1. Create the app on Fly.io
 
 ```bash
 flyctl launch
 ```
 
-Isso vai:
-- Pedir um nome único para a app (ex: `chess-game`)
-- Sugerir uma região
-- Detectar e configurar automaticamente o `fly.toml`
+This will:
+- Ask for a unique name for the app (e.g., `chess-game`)
+- Suggest a region
+- Automatically detect and configure `fly.toml`
 
-### 2. Customizar o `fly.toml` (após `flyctl launch`)
+### 2. Customize `fly.toml` (after `flyctl launch`)
 
-Edite `fly.toml` se precisar ajustar:
-- `app = "seu-app-name"` → nome da app criada
-- `primary_region = "gig"` → região (ex: `sjc`, `iad`, `fra`)
-- `PHX_HOST` → atualize para o domínio correto da sua app
+Edit `fly.toml` if you need to adjust:
+- `app = "your-app-name"` → name of the created app
+- `primary_region = "gig"` → region (e.g., `sjc`, `iad`, `fra`)
+- `PHX_HOST` → update to the correct domain of your app
 
-### 3. Configurar variáveis de ambiente
+### 3. Generate the SECRET_KEY_BASE
 
-Defina a chave secreta no Fly.io:
+Generate a secure secret key using Phoenix's generator command:
+
+```bash
+mix phx.gen.secret
+```
+
+This will output a random 64-character secret string. Copy this value for the next step.
+
+### 4. Set environment variables
+
+Set the secret key on Fly.io:
 
 ```bash
 flyctl secrets set SECRET_KEY_BASE="<SECRET_KEY_BASE>"
 ```
 
-### 4. Deploy
+### 5. Deploy
 
 ```bash
 flyctl deploy
 ```
 
-### 5. Verificar o status
+### 6. Check status
 
 ```bash
-# Ver logs em tempo real
+# View logs in real time
 flyctl logs
 
-# Status da app
+# App status
 flyctl status
 
-# Ver variáveis de ambiente configuradas
+# View configured environment variables
 flyctl secrets list
 
-# Abrir a app no navegador
+# Open the app in the browser
 flyctl open
 ```
 
 ## Troubleshooting
 
-### Erro: "Could not find App"
-Você precisa rodar `flyctl launch` primeiro para criar a app:
+### Error: "Could not find App"
+You need to run `flyctl launch` first to create the app:
 ```bash
 flyctl launch
 ```
 
-### Erro: "SECRET_KEY_BASE is missing"
-Configure a variável secreta após criar a app:
+### Error: "SECRET_KEY_BASE is missing"
+Configure the secret variable after creating the app:
 ```bash
-flyctl secrets set SECRET_KEY_BASE="SI7z15iMKSzzJZG0HEIo41tonKEsJQHoEzCQtfRfrRoyW7nsUvqabnmC2ZkWc4qa"
+flyctl secrets set SECRET_KEY_BASE="<SECRET_KEY_BASE>"
 ```
 
-### App crashing ou erro no build
-Verifique os logs completos:
+### App crashing or build error
+Check the complete logs:
 ```bash
 flyctl logs --all
 ```
 
-### Rebuild sem cache (força rebuild da imagem Docker)
+### Rebuild without cache (forces Docker image rebuild)
 ```bash
 flyctl deploy --build-only --no-cache
 ```
 
-### Gerar nova SECRET_KEY_BASE
+### Generate new SECRET_KEY_BASE
 ```bash
 mix phx.gen.secret
 ```
-Depois configure no Fly.io:
+Then configure on Fly.io:
 ```bash
-flyctl secrets set SECRET_KEY_BASE="<nova-chave>"
+flyctl secrets set SECRET_KEY_BASE="<new-key>"
 ```
 
-## Próximos passos
+## Next steps
 
-Após o deploy inicial:
-1. Configure domínio customizado no Fly.io dashboard
-2. Se usar banco de dados, considere usar PostgreSQL do Fly.io ou Supabase
-3. Monitore a app em [https://fly.io/dashboard](https://fly.io/dashboard)
+After the initial deployment:
+1. Configure a custom domain in the Fly.io dashboard
+2. If you use a database, consider using PostgreSQL from Fly.io or Supabase
+3. Monitor the app at [https://fly.io/dashboard](https://fly.io/dashboard)
