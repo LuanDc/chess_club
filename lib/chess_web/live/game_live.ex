@@ -224,13 +224,15 @@ defmodule ChessWeb.GameLive do
     <div class="min-h-screen flex flex-col">
       <.navbar>
         <:right>
-          <.solo_badge :if={@mode == :solo} />
-          <.link
-            patch={~p"/lobby"}
-            class="inline-flex items-center justify-center px-3.5 py-1.5 text-[13px] rounded-md border border-border2 text-text hover:bg-surface2"
-          >
-            ← Lobby
-          </.link>
+          <div class="flex flex-col items-end gap-2 min-[1100px]:flex-row min-[1100px]:items-center min-[1100px]:gap-3">
+            <.solo_badge :if={@mode == :solo} />
+            <.link
+              patch={~p"/lobby"}
+              class="inline-flex items-center justify-center px-3.5 py-1.5 text-[13px] rounded-md border border-border2 text-text hover:bg-surface2"
+            >
+              ← Lobby
+            </.link>
+          </div>
         </:right>
       </.navbar>
 
