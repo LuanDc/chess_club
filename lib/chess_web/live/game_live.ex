@@ -55,8 +55,7 @@ defmodule ChessWeb.GameLive do
       selected: nil,
       legal_targets: [],
       disconnected_player: nil,
-      disconnect_deadline_ms: nil,
-      disconnect_seconds_left: nil
+      disconnect_deadline_ms: nil
     )
   end
 
@@ -225,14 +224,10 @@ defmodule ChessWeb.GameLive do
 
   def handle_info({:opponent_disconnected, nickname, deadline_ms}, socket) do
     if opponent?(socket.assigns, nickname) do
-      seconds_left = seconds_until(deadline_ms)
-      Process.send_after(self(), :countdown_tick, 1000)
-
       {:noreply,
        assign(socket,
          disconnected_player: nickname,
-         disconnect_deadline_ms: deadline_ms,
-         disconnect_seconds_left: seconds_left
+         disconnect_deadline_ms: deadline_ms
        )}
     else
       {:noreply, socket}
@@ -245,15 +240,6 @@ defmodule ChessWeb.GameLive do
     else
       {:noreply, socket}
     end
-  end
-
-  def handle_info(:countdown_tick, %{assigns: %{disconnected_player: nil}} = socket),
-    do: {:noreply, socket}
-
-  def handle_info(:countdown_tick, socket) do
-    seconds_left = seconds_until(socket.assigns.disconnect_deadline_ms)
-    if seconds_left > 0, do: Process.send_after(self(), :countdown_tick, 1000)
-    {:noreply, assign(socket, disconnect_seconds_left: seconds_left)}
   end
 
   defp opponent?(%{mode: :solo}, _nickname), do: false
@@ -269,8 +255,7 @@ defmodule ChessWeb.GameLive do
   defp clear_disconnect_assigns(socket) do
     assign(socket,
       disconnected_player: nil,
-      disconnect_deadline_ms: nil,
-      disconnect_seconds_left: nil
+      disconnect_deadline_ms: nil
     )
   end
 
@@ -307,7 +292,8 @@ defmodule ChessWeb.GameLive do
           <.disconnect_banner
             :if={@disconnected_player}
             nickname={@disconnected_player}
-            seconds_left={@disconnect_seconds_left}
+            deadline_ms={@disconnect_deadline_ms}
+            initial_seconds_left={seconds_until(@disconnect_deadline_ms)}
           />
 
           <.board

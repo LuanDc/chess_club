@@ -252,5 +252,5 @@ defmodule Chess.GameServer do
     Enum.any?(state.connections, fn {_pid, {nick, _ref}} -> nick == nickname end)
   end
 
-  defp grace_ms, do: Application.get_env(:chess, :resign_grace_ms, 30_000)
+  defp grace_ms, do: Application.get_env(:chess, :resign_grace_ms, 10_000)
 end
