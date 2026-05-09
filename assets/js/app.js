@@ -22,10 +22,36 @@ import {Socket} from "phoenix"
 import {LiveSocket} from "phoenix_live_view"
 import topbar from "../vendor/topbar"
 
+const Hooks = {}
+
+Hooks.DisconnectCountdown = {
+  mounted() {
+    this.deadline = parseInt(this.el.dataset.deadlineMs, 10)
+    this.last = null
+    const tick = () => {
+      const s = Math.max(0, Math.floor((this.deadline - Date.now()) / 1000))
+      if (s !== this.last) {
+        this.el.textContent = s
+        this.last = s
+      }
+      if (s <= 0 && this.timer) {
+        clearInterval(this.timer)
+        this.timer = null
+      }
+    }
+    tick()
+    this.timer = setInterval(tick, 250)
+  },
+  destroyed() {
+    if (this.timer) clearInterval(this.timer)
+  }
+}
+
 let csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content")
 let liveSocket = new LiveSocket("/live", Socket, {
   longPollFallbackMs: 2500,
-  params: {_csrf_token: csrfToken}
+  params: {_csrf_token: csrfToken},
+  hooks: Hooks
 })
 
 // Show progress bar on live navigation and form submits

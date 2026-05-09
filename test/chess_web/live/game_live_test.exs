@@ -198,6 +198,27 @@ defmodule ChessWeb.GameLiveTest do
       assert bob_html =~ "bg-yellow-50"
     end
 
+    test "disconnect banner includes hook and deadline for client-side countdown" do
+      previous = Application.get_env(:chess, :resign_grace_ms)
+      Application.put_env(:chess, :resign_grace_ms, 5_000)
+      on_exit(fn -> Application.put_env(:chess, :resign_grace_ms, previous) end)
+
+      Process.flag(:trap_exit, true)
+      room_id = start_multiplayer_game()
+      alice_conn = build_conn() |> Plug.Test.init_test_session(%{nickname: "Alice"})
+      bob_conn = build_conn() |> Plug.Test.init_test_session(%{nickname: "Bob"})
+
+      {:ok, alice_view, _} = live(alice_conn, ~p"/games/#{room_id}")
+      {:ok, bob_view, _} = live(bob_conn, ~p"/games/#{room_id}")
+
+      Process.exit(alice_view.pid, :kill)
+      Process.sleep(100)
+
+      bob_html = render(bob_view)
+      assert bob_html =~ ~s(phx-hook="DisconnectCountdown")
+      assert bob_html =~ ~s(data-deadline-ms=)
+    end
+
     test "hides top player bar when disconnect banner is shown" do
       previous = Application.get_env(:chess, :resign_grace_ms)
       Application.put_env(:chess, :resign_grace_ms, 5_000)
@@ -221,7 +242,8 @@ defmodule ChessWeb.GameLiveTest do
       # After disconnect, banner should be visible and top player bar should be hidden
       bob_html = render(bob_view)
       assert bob_html =~ "se desconectou"
-      refute bob_html =~ "role=\"status\".*Pretas" # top player bar for black's opponent (white)
+      # top player bar for black's opponent (white)
+      refute bob_html =~ "role=\"status\".*Pretas"
     end
 
     test "banner disappears and player bar returns when opponent reconnects within grace" do

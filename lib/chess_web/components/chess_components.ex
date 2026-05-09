@@ -308,7 +308,8 @@ defmodule ChessWeb.ChessComponents do
   ## Disconnect banner ───────────────────────────────────────────────────
 
   attr :nickname, :string, required: true
-  attr :seconds_left, :integer, required: true
+  attr :deadline_ms, :integer, required: true
+  attr :initial_seconds_left, :integer, required: true
 
   def disconnect_banner(assigns) do
     ~H"""
@@ -319,7 +320,12 @@ defmodule ChessWeb.ChessComponents do
       <span class="text-xl" aria-hidden="true">⚠</span>
       <div class="flex-1 text-[14px] leading-snug">
         <strong class="font-semibold">{@nickname}</strong>
-        se desconectou. Vitória automática em <strong class="font-mono">{@seconds_left}s</strong>.
+        se desconectou. Vitória automática em <strong class="font-mono"><span
+            id="disconnect-countdown"
+            phx-hook="DisconnectCountdown"
+            phx-update="ignore"
+            data-deadline-ms={@deadline_ms}
+          >{@initial_seconds_left}</span>s</strong>.
       </div>
     </div>
     """
