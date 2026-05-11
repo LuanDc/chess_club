@@ -1,10 +1,10 @@
-# fly.toml app configuration file generated for chess-battle-app on 2026-05-08T22:26:07+02:00
+# fly.toml app configuration file generated for chess-battle-app on 2026-05-11T17:07:21+02:00
 #
 # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
 #
 
 app = 'chess-battle-app'
-primary_region = 'gru'
+primary_region = 'fra'
 
 [build]
   dockerfile = 'Dockerfile'
