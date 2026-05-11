@@ -23,4 +23,7 @@ config :phoenix, :plug_init_mode, :runtime
 config :phoenix_live_view,
   enable_expensive_runtime_checks: true
 
-config :chess, :resign_grace_ms, 0
+config :chess, Chess.GameServer,
+  resign_grace_ms: 0,
+  join_timeout_ms: 100,
+  shutdown_grace_ms: 100

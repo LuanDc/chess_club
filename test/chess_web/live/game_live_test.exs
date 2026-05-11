@@ -176,9 +176,15 @@ defmodule ChessWeb.GameLiveTest do
     end
 
     test "shows yellow disconnect banner with opponent name when opponent disconnects" do
-      previous = Application.get_env(:chess, :resign_grace_ms)
-      Application.put_env(:chess, :resign_grace_ms, 5_000)
-      on_exit(fn -> Application.put_env(:chess, :resign_grace_ms, previous) end)
+      previous = Application.get_env(:chess, Chess.GameServer, [])
+
+      Application.put_env(
+        :chess,
+        Chess.GameServer,
+        Keyword.put(previous || [], :resign_grace_ms, 5_000)
+      )
+
+      on_exit(fn -> Application.put_env(:chess, Chess.GameServer, previous) end)
 
       Process.flag(:trap_exit, true)
       room_id = start_multiplayer_game()
@@ -199,9 +205,15 @@ defmodule ChessWeb.GameLiveTest do
     end
 
     test "disconnect banner includes hook and deadline for client-side countdown" do
-      previous = Application.get_env(:chess, :resign_grace_ms)
-      Application.put_env(:chess, :resign_grace_ms, 5_000)
-      on_exit(fn -> Application.put_env(:chess, :resign_grace_ms, previous) end)
+      previous = Application.get_env(:chess, Chess.GameServer, [])
+
+      Application.put_env(
+        :chess,
+        Chess.GameServer,
+        Keyword.put(previous || [], :resign_grace_ms, 5_000)
+      )
+
+      on_exit(fn -> Application.put_env(:chess, Chess.GameServer, previous) end)
 
       Process.flag(:trap_exit, true)
       room_id = start_multiplayer_game()
@@ -220,9 +232,15 @@ defmodule ChessWeb.GameLiveTest do
     end
 
     test "hides top player bar when disconnect banner is shown" do
-      previous = Application.get_env(:chess, :resign_grace_ms)
-      Application.put_env(:chess, :resign_grace_ms, 5_000)
-      on_exit(fn -> Application.put_env(:chess, :resign_grace_ms, previous) end)
+      previous = Application.get_env(:chess, Chess.GameServer, [])
+
+      Application.put_env(
+        :chess,
+        Chess.GameServer,
+        Keyword.put(previous || [], :resign_grace_ms, 5_000)
+      )
+
+      on_exit(fn -> Application.put_env(:chess, Chess.GameServer, previous) end)
 
       Process.flag(:trap_exit, true)
       room_id = start_multiplayer_game()
@@ -247,9 +265,15 @@ defmodule ChessWeb.GameLiveTest do
     end
 
     test "banner disappears and player bar returns when opponent reconnects within grace" do
-      previous = Application.get_env(:chess, :resign_grace_ms)
-      Application.put_env(:chess, :resign_grace_ms, 10_000)
-      on_exit(fn -> Application.put_env(:chess, :resign_grace_ms, previous) end)
+      previous = Application.get_env(:chess, Chess.GameServer, [])
+
+      Application.put_env(
+        :chess,
+        Chess.GameServer,
+        Keyword.put(previous || [], :resign_grace_ms, 10_000)
+      )
+
+      on_exit(fn -> Application.put_env(:chess, Chess.GameServer, previous) end)
 
       Process.flag(:trap_exit, true)
       room_id = start_multiplayer_game()

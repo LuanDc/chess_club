@@ -22,7 +22,8 @@ defmodule Chess.GameServer do
       :session,
       started_at: nil,
       connections: %{},
-      pending_resigns: %{}
+      pending_resigns: %{},
+      shutdown_timer: nil
     ]
   end
 
@@ -56,7 +57,8 @@ defmodule Chess.GameServer do
   def init(%{room_id: room_id, mode: mode, white: white, black: black}) do
     case GameSession.new(room_id, mode, white, black) do
       {:ok, session} ->
-        {:ok, %State{session: session, started_at: System.system_time(:second)}}
+        state = %State{session: session, started_at: System.system_time(:second)}
+        {:ok, schedule_shutdown_check(state, join_timeout_ms())}
 
       {:error, reason} ->
         {:stop, reason}
@@ -120,6 +122,7 @@ defmodule Chess.GameServer do
         state
         |> register_connection(pid, nickname)
         |> cancel_pending_resign(nickname)
+        |> cancel_shutdown_timer()
 
       if was_pending?, do: broadcast_reconnect(new_state, nickname)
 
@@ -136,8 +139,12 @@ defmodule Chess.GameServer do
         {:noreply, state}
 
       {{nickname, _ref}, remaining} ->
-        new_state = %State{state | connections: remaining}
-        {:noreply, maybe_schedule_auto_resign(new_state, nickname)}
+        new_state =
+          %State{state | connections: remaining}
+          |> maybe_schedule_auto_resign(nickname)
+          |> maybe_schedule_shutdown()
+
+        {:noreply, new_state}
     end
   end
 
@@ -145,27 +152,39 @@ defmodule Chess.GameServer do
     new_state = %State{state | pending_resigns: Map.delete(state.pending_resigns, nickname)}
     g = new_state.session.game
 
-    cond do
-      g.status != :in_progress ->
-        {:noreply, new_state}
+    resolved =
+      cond do
+        g.status != :in_progress ->
+          new_state
 
-      g.mode == :solo ->
-        {:noreply, new_state}
+        g.mode == :solo ->
+          new_state
 
-      reconnected?(new_state, nickname) ->
-        {:noreply, new_state}
+        reconnected?(new_state, nickname) ->
+          new_state
 
-      true ->
-        case GameSession.resign(new_state.session, nickname) do
-          {:ok, new_session} ->
-            resigned_state = %State{new_state | session: new_session}
-            broadcast(resigned_state)
-            {:noreply, resigned_state}
+        true ->
+          case GameSession.resign(new_state.session, nickname) do
+            {:ok, new_session} ->
+              resigned_state = %State{new_state | session: new_session}
+              broadcast(resigned_state)
+              resigned_state
 
-          {:error, _} ->
-            {:noreply, new_state}
-        end
-    end
+            {:error, _} ->
+              new_state
+          end
+      end
+
+    {:noreply, maybe_schedule_shutdown(resolved)}
+  end
+
+  def handle_info(:shutdown_check, %State{connections: connections} = state)
+      when map_size(connections) == 0 do
+    {:stop, :normal, state}
+  end
+
+  def handle_info(:shutdown_check, state) do
+    {:noreply, %State{state | shutdown_timer: nil}}
   end
 
   @impl true
@@ -252,5 +271,28 @@ defmodule Chess.GameServer do
     Enum.any?(state.connections, fn {_pid, {nick, _ref}} -> nick == nickname end)
   end
 
-  defp grace_ms, do: Application.get_env(:chess, :resign_grace_ms, 10_000)
+  defp grace_ms, do: Application.get_env(:chess, Chess.GameServer, [])[:resign_grace_ms]
+  defp join_timeout_ms, do: Application.get_env(:chess, Chess.GameServer, [])[:join_timeout_ms]
+
+  defp shutdown_grace_ms,
+    do: Application.get_env(:chess, Chess.GameServer, [])[:shutdown_grace_ms]
+
+  defp maybe_schedule_shutdown(%State{connections: connections} = state)
+       when map_size(connections) == 0 do
+    schedule_shutdown_check(cancel_shutdown_timer(state), shutdown_grace_ms())
+  end
+
+  defp maybe_schedule_shutdown(state), do: state
+
+  defp schedule_shutdown_check(state, grace_ms) do
+    timer_ref = Process.send_after(self(), :shutdown_check, grace_ms)
+    %State{state | shutdown_timer: timer_ref}
+  end
+
+  defp cancel_shutdown_timer(%State{shutdown_timer: nil} = state), do: state
+
+  defp cancel_shutdown_timer(%State{shutdown_timer: ref} = state) do
+    Process.cancel_timer(ref)
+    %State{state | shutdown_timer: nil}
+  end
 end

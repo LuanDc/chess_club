@@ -60,6 +60,14 @@ config :logger, :console,
 # Use Jason for JSON parsing in Phoenix
 config :phoenix, :json_library, Jason
 
+config :chess, Chess.GameServer,
+  # Time allowed for a player to resign/surrender a game gracefully
+  resign_grace_ms: 5_000,
+  # Timeout limit for a player to join an existing game
+  join_timeout_ms: 5_000,
+  # Grace period before forcing shutdown of game servers with no active connections
+  shutdown_grace_ms: 5_000
+
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.
 import_config "#{config_env()}.exs"
