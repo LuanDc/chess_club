@@ -7,6 +7,12 @@ defmodule Chess.GameServerTest do
 
   defp spawn_player, do: spawn(fn -> Process.sleep(:infinity) end)
 
+  defp put_env(key, value) do
+    previous = Application.get_env(:chess, key)
+    Application.put_env(:chess, key, value)
+    on_exit(fn -> Application.put_env(:chess, key, previous) end)
+  end
+
   defp start_game(opts \\ []) do
     room_id = Keyword.get_lazy(opts, :room_id, &unique_room_id/0)
     white = Keyword.get(opts, :white, "Alice")
@@ -271,6 +277,97 @@ defmodule Chess.GameServerTest do
 
       Process.exit(pid, :kill)
       refute_receive {:game_state, _}, 50
+    end
+  end
+
+  describe "auto-shutdown" do
+    test "shuts down after join_timeout_ms when no player ever joins" do
+      put_env(:join_timeout_ms, 50)
+      %{room_id: room_id} = start_game()
+      {:ok, pid} = Games.lookup(room_id)
+      ref = Process.monitor(pid)
+
+      assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 500
+    end
+
+    test "shuts down after both players disconnect from a finished game" do
+      put_env(:shutdown_grace_ms, 50)
+      %{room_id: room_id} = start_game()
+      {:ok, game_pid} = Games.lookup(room_id)
+      ref = Process.monitor(game_pid)
+
+      pid1 = spawn_player()
+      pid2 = spawn_player()
+      :ok = Games.join(room_id, pid1, "Alice")
+      :ok = Games.join(room_id, pid2, "Bob")
+
+      {:ok, _} = Games.resign(room_id, "Alice")
+      assert_receive {:game_state, %{status: {:winner, :black, :resign}}}
+
+      Process.exit(pid1, :kill)
+      Process.exit(pid2, :kill)
+
+      assert_receive {:DOWN, ^ref, :process, ^game_pid, :normal}, 500
+    end
+
+    test "shuts down after auto-resign drains the last connection" do
+      put_env(:shutdown_grace_ms, 50)
+      %{room_id: room_id} = start_game()
+      {:ok, game_pid} = Games.lookup(room_id)
+      ref = Process.monitor(game_pid)
+
+      pid = spawn_player()
+      :ok = Games.join(room_id, pid, "Alice")
+
+      Process.exit(pid, :kill)
+
+      assert_receive {:game_state, %{status: {:winner, :black, :resign}}}, 200
+      assert_receive {:DOWN, ^ref, :process, ^game_pid, :normal}, 500
+    end
+
+    test "shuts down after solo player disconnects" do
+      put_env(:shutdown_grace_ms, 50)
+      %{room_id: room_id} = start_game(mode: :solo, white: "Alice", black: "Alice")
+      {:ok, game_pid} = Games.lookup(room_id)
+      ref = Process.monitor(game_pid)
+
+      pid = spawn_player()
+      :ok = Games.join(room_id, pid, "Alice")
+
+      Process.exit(pid, :kill)
+
+      refute_receive {:game_state, _}, 30
+      assert_receive {:DOWN, ^ref, :process, ^game_pid, :normal}, 500
+    end
+
+    test "reconnect within shutdown grace keeps the process alive" do
+      put_env(:shutdown_grace_ms, 100)
+      %{room_id: room_id} = start_game()
+      {:ok, game_pid} = Games.lookup(room_id)
+      ref = Process.monitor(game_pid)
+
+      pid1 = spawn_player()
+      :ok = Games.join(room_id, pid1, "Alice")
+
+      Process.exit(pid1, :kill)
+      Process.sleep(20)
+
+      pid2 = spawn_player()
+      :ok = Games.join(room_id, pid2, "Alice")
+
+      refute_receive {:DOWN, ^ref, :process, ^game_pid, _}, 300
+    end
+
+    test "joining within join_timeout cancels the init shutdown timer" do
+      put_env(:join_timeout_ms, 50)
+      %{room_id: room_id} = start_game()
+      {:ok, game_pid} = Games.lookup(room_id)
+      ref = Process.monitor(game_pid)
+
+      pid = spawn_player()
+      :ok = Games.join(room_id, pid, "Alice")
+
+      refute_receive {:DOWN, ^ref, :process, ^game_pid, _}, 200
     end
   end
 end
