@@ -8,9 +8,10 @@ defmodule Chess.GameServerTest do
   defp spawn_player, do: spawn(fn -> Process.sleep(:infinity) end)
 
   defp put_env(key, value) do
-    previous = Application.get_env(:chess, key)
-    Application.put_env(:chess, key, value)
-    on_exit(fn -> Application.put_env(:chess, key, previous) end)
+    previous = Application.get_env(:chess, Chess.GameServer, [])
+    config = previous || []
+    Application.put_env(:chess, Chess.GameServer, Keyword.put(config, key, value))
+    on_exit(fn -> Application.put_env(:chess, Chess.GameServer, previous) end)
   end
 
   defp start_game(opts \\ []) do
@@ -193,9 +194,15 @@ defmodule Chess.GameServerTest do
     end
 
     test "reconnect within grace cancels auto-resign" do
-      previous = Application.get_env(:chess, :resign_grace_ms)
-      Application.put_env(:chess, :resign_grace_ms, 100)
-      on_exit(fn -> Application.put_env(:chess, :resign_grace_ms, previous) end)
+      previous = Application.get_env(:chess, Chess.GameServer, [])
+
+      Application.put_env(
+        :chess,
+        Chess.GameServer,
+        Keyword.put(previous || [], :resign_grace_ms, 100)
+      )
+
+      on_exit(fn -> Application.put_env(:chess, Chess.GameServer, previous) end)
 
       %{room_id: room_id} = start_game()
       pid1 = spawn_player()
@@ -211,9 +218,15 @@ defmodule Chess.GameServerTest do
     end
 
     test "broadcasts :opponent_reconnected when player rejoins within grace" do
-      previous = Application.get_env(:chess, :resign_grace_ms)
-      Application.put_env(:chess, :resign_grace_ms, 500)
-      on_exit(fn -> Application.put_env(:chess, :resign_grace_ms, previous) end)
+      previous = Application.get_env(:chess, Chess.GameServer, [])
+
+      Application.put_env(
+        :chess,
+        Chess.GameServer,
+        Keyword.put(previous || [], :resign_grace_ms, 500)
+      )
+
+      on_exit(fn -> Application.put_env(:chess, Chess.GameServer, previous) end)
 
       %{room_id: room_id} = start_game()
       pid1 = spawn_player()

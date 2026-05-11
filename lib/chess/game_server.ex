@@ -271,9 +271,11 @@ defmodule Chess.GameServer do
     Enum.any?(state.connections, fn {_pid, {nick, _ref}} -> nick == nickname end)
   end
 
-  defp grace_ms, do: Application.get_env(:chess, :resign_grace_ms, 10_000)
-  defp join_timeout_ms, do: Application.get_env(:chess, :join_timeout_ms, 60_000)
-  defp shutdown_grace_ms, do: Application.get_env(:chess, :shutdown_grace_ms, 30_000)
+  defp grace_ms, do: Application.get_env(:chess, Chess.GameServer, [])[:resign_grace_ms]
+  defp join_timeout_ms, do: Application.get_env(:chess, Chess.GameServer, [])[:join_timeout_ms]
+
+  defp shutdown_grace_ms,
+    do: Application.get_env(:chess, Chess.GameServer, [])[:shutdown_grace_ms]
 
   defp maybe_schedule_shutdown(%State{connections: connections} = state)
        when map_size(connections) == 0 do

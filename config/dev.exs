@@ -73,7 +73,3 @@ config :phoenix_live_view,
 
 # Disable swoosh api client as it is only required for production adapters.
 config :swoosh, :api_client, false
-
-config :chess, :resign_grace_ms, 5_000
-config :chess, :join_timeout_ms, 60_000
-config :chess, :shutdown_grace_ms, 30_000

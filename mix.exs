@@ -25,9 +25,12 @@ defmodule Chess.MixProject do
   def application do
     [
       mod: {Chess.Application, []},
-      extra_applications: [:logger, :runtime_tools]
+      extra_applications: [:logger] ++ applications_by_env(Mix.env())
     ]
   end
+
+  defp applications_by_env(:dev), do: [:runtime_tools, :wx, :observer]
+  defp applications_by_env(_env), do: []
 
   # Specifies which paths to compile per environment.
   defp elixirc_paths(:test), do: ["lib", "test/support"]

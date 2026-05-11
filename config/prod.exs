@@ -20,9 +20,5 @@ config :swoosh, local: false
 # Do not print debug messages in production
 config :logger, level: :info
 
-config :chess, :resign_grace_ms, 10_000
-config :chess, :join_timeout_ms, 60_000
-config :chess, :shutdown_grace_ms, 30_000
-
 # Runtime production configuration, including reading
 # of environment variables, is done on config/runtime.exs.
