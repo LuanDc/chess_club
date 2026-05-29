@@ -12,10 +12,7 @@ defmodule Chess.Application do
       {DNSCluster, query: Application.get_env(:chess, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: Chess.PubSub},
       {Finch, name: Chess.Finch},
-      Chess.Rooms,
-      {Registry, keys: :unique, name: Chess.GameRegistry},
-      {Registry, keys: :unique, name: Chess.GameInstanceRegistry},
-      {DynamicSupervisor, name: Chess.GameSupervisor, strategy: :one_for_one},
+      Chess.GameInfrastructure,
       ChessWeb.Endpoint
     ]
 
