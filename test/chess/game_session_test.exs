@@ -145,4 +145,20 @@ defmodule Chess.GameSessionTest do
       assert is_binary(state.fen)
     end
   end
+
+  describe "from_pid/5" do
+    test "builds a session bound to a pre-started engine pid" do
+      {:ok, engine_pid} = Chess.GameEngine.new()
+      on_exit(fn -> Chess.GameEngine.stop(engine_pid) end)
+
+      session = GameSession.from_pid("r", :multiplayer, "Alice", "Bob", engine_pid)
+
+      assert session.game_pid == engine_pid
+      assert session.game.room_id == "r"
+      assert session.game.mode == :multiplayer
+      assert session.game.players == %{white: "Alice", black: "Bob"}
+      assert session.game.status == :in_progress
+      assert session.game.history == []
+    end
+  end
 end

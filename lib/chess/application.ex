@@ -14,6 +14,7 @@ defmodule Chess.Application do
       {Finch, name: Chess.Finch},
       Chess.Rooms,
       {Registry, keys: :unique, name: Chess.GameRegistry},
+      {Registry, keys: :unique, name: Chess.GameInstanceRegistry},
       {DynamicSupervisor, name: Chess.GameSupervisor, strategy: :one_for_one},
       ChessWeb.Endpoint
     ]

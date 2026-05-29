@@ -107,4 +107,50 @@ defmodule Chess.GameEngineTest do
       GameEngine.stop(pid)
     end
   end
+
+  describe "self-healing on binbo crash" do
+    test "swaps in a fresh binbo and replays moves" do
+      {:ok, engine} = GameEngine.new()
+      on_exit(fn -> GameEngine.stop(engine) end)
+
+      {:ok, _} = GameEngine.move(engine, "e2", "e4")
+      {:ok, _} = GameEngine.move(engine, "e7", "e5")
+      fen_before = GameEngine.fen(engine)
+
+      old_binbo = :sys.get_state(engine).binbo
+      :erlang.exit(old_binbo, :kill)
+      # synchronize: this call only returns after handle_info has been processed
+      :sys.get_state(engine)
+
+      new_binbo = :sys.get_state(engine).binbo
+      assert new_binbo != old_binbo
+      assert Process.alive?(new_binbo)
+      assert GameEngine.fen(engine) == fen_before
+    end
+
+    test "engine pid is stable across binbo crash" do
+      {:ok, engine} = GameEngine.new()
+      on_exit(fn -> GameEngine.stop(engine) end)
+
+      binbo = :sys.get_state(engine).binbo
+      :erlang.exit(binbo, :kill)
+      :sys.get_state(engine)
+
+      assert Process.alive?(engine)
+    end
+
+    test "restores winner after binbo crash" do
+      {:ok, engine} = GameEngine.new()
+      on_exit(fn -> GameEngine.stop(engine) end)
+
+      :ok = GameEngine.set_winner(engine, :white, :resign)
+      status_before = GameEngine.status(engine)
+
+      binbo = :sys.get_state(engine).binbo
+      :erlang.exit(binbo, :kill)
+      :sys.get_state(engine)
+
+      assert GameEngine.status(engine) == status_before
+    end
+  end
 end

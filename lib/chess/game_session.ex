@@ -28,6 +28,11 @@ defmodule Chess.GameSession do
     end
   end
 
+  @spec from_pid(String.t(), :solo | :multiplayer, String.t(), String.t(), pid()) :: t()
+  def from_pid(room_id, mode, white, black, game_pid) do
+    %__MODULE__{game: Games.new(room_id, mode, white, black), game_pid: game_pid}
+  end
+
   @spec move(t(), String.t(), String.t(), String.t(), atom() | nil) ::
           {:ok, t()} | {:error, term()}
   def move(%__MODULE__{game: g, game_pid: game_pid} = session, nickname, from, to, promo) do

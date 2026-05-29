@@ -35,12 +35,7 @@ defmodule Chess.GameServerTest do
     %{room_id: room_id, white: white, black: black}
   end
 
-  defp cleanup_game(room_id) do
-    case Games.lookup(room_id) do
-      {:ok, pid} -> if Process.alive?(pid), do: GenServer.stop(pid)
-      _ -> :ok
-    end
-  end
+  defp cleanup_game(room_id), do: Games.stop(room_id)
 
   describe "start_game/1" do
     test "starts a game registered under room_id" do
@@ -381,6 +376,87 @@ defmodule Chess.GameServerTest do
       :ok = Games.join(room_id, pid, "Alice")
 
       refute_receive {:DOWN, ^ref, :process, ^game_pid, _}, 200
+    end
+  end
+
+  describe "Binbo crash recovery" do
+    defp engine_pid(room_id) do
+      :sys.get_state(Chess.GameServer.via(room_id)).session.game_pid
+    end
+
+    defp binbo_pid(room_id) do
+      :sys.get_state(engine_pid(room_id)).binbo
+    end
+
+    test "binbo crash is invisible to subscribers (no broadcast)" do
+      %{room_id: room_id} = start_game()
+      {:ok, _} = Games.move(room_id, "Alice", "e2", "e4")
+      assert_receive {:game_state, _}
+
+      :erlang.exit(binbo_pid(room_id), :kill)
+
+      refute_receive {:game_state, _}, 200
+    end
+
+    test "game remains playable after binbo crash" do
+      %{room_id: room_id} = start_game()
+      {:ok, _} = Games.move(room_id, "Alice", "e2", "e4")
+      assert_receive {:game_state, _}
+
+      :erlang.exit(binbo_pid(room_id), :kill)
+      # synchronize: this call only returns after the engine's :DOWN is handled
+      :sys.get_state(engine_pid(room_id))
+
+      assert {:ok, state} = Games.move(room_id, "Bob", "e7", "e5")
+      assert length(state.history) == 2
+    end
+
+    test "FEN is consistent across the crash boundary" do
+      %{room_id: room_id} = start_game()
+      {:ok, before} = Games.move(room_id, "Alice", "e2", "e4")
+      assert_receive {:game_state, _}
+
+      :erlang.exit(binbo_pid(room_id), :kill)
+      :sys.get_state(engine_pid(room_id))
+
+      assert Games.get_state(room_id).fen == before.fen
+    end
+
+    test "underlying binbo pid changes; GameEngine pid stays stable" do
+      %{room_id: room_id} = start_game()
+      original_engine = engine_pid(room_id)
+      original_binbo = binbo_pid(room_id)
+
+      :erlang.exit(original_binbo, :kill)
+      :sys.get_state(original_engine)
+
+      assert engine_pid(room_id) == original_engine
+      assert binbo_pid(room_id) != original_binbo
+      assert Process.alive?(binbo_pid(room_id))
+    end
+
+    test "GameServer survives binbo crash without cascading" do
+      put_env(:join_timeout_ms, 5_000)
+      %{room_id: room_id} = start_game()
+      {:ok, gs_pid} = Games.lookup(room_id)
+      ref = Process.monitor(gs_pid)
+
+      :erlang.exit(binbo_pid(room_id), :kill)
+
+      refute_receive {:DOWN, ^ref, :process, _, _}, 300
+    end
+
+    test "preserves resignation-ended status across binbo crash" do
+      %{room_id: room_id} = start_game()
+      {:ok, _} = Games.move(room_id, "Alice", "e2", "e4")
+      assert_receive {:game_state, _}
+      {:ok, _} = Games.resign(room_id, "Alice")
+      assert_receive {:game_state, _}
+
+      :erlang.exit(binbo_pid(room_id), :kill)
+      :sys.get_state(engine_pid(room_id))
+
+      assert Games.get_state(room_id).status == {:winner, :black, :resign}
     end
   end
 end

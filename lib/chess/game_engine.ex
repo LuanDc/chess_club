@@ -1,13 +1,11 @@
 defmodule Chess.GameEngine do
   @moduledoc """
-  Thin wrapper around the binbo chess engine. Owns a binbo server pid
-  and exposes an Elixir-flavoured API: starts in the initial position,
-  validates moves, returns FEN, status, and legal moves.
-
-  All public functions normalize binbo's Erlang atoms / tuples / binaries
-  into Elixir-friendly shapes so the rest of the app does not depend on
-  binbo directly.
+  GenServer wrapper around the binbo chess engine. Owns the underlying
+  binbo pid and self-heals if it crashes: records every move and any
+  manually-set winner, and on `:DOWN` starts a fresh binbo and replays
+  the recorded history so callers see a stable engine pid throughout.
   """
+  use GenServer
 
   @type color :: :white | :black
   @type piece :: :pawn | :knight | :bishop | :rook | :queen | :king
@@ -17,98 +15,163 @@ defmodule Chess.GameEngine do
           | {:draw, atom()}
           | {:winner, color(), term()}
 
-  @doc "Starts a fresh game in the initial position."
-  @spec new() :: {:ok, pid()} | {:error, term()}
-  def new do
-    case :binbo.new_server() do
-      {:ok, pid} ->
-        case :binbo.new_game(pid) do
-          {:ok, _status} -> {:ok, pid}
-          err -> err
-        end
+  ## Client API
 
-      err ->
-        err
-    end
-  end
+  def start_link(opts \\ []), do: GenServer.start_link(__MODULE__, opts)
 
-  @doc "Stops the underlying binbo server."
-  @spec stop(pid()) :: :ok
-  def stop(pid) when is_pid(pid) do
-    if Process.alive?(pid) do
-      :binbo.stop_server(pid)
-    end
+  @doc "Back-compat alias for `start_link/0`."
+  def new, do: start_link()
 
+  def stop(pid) do
+    if Process.alive?(pid), do: GenServer.stop(pid)
     :ok
   end
 
-  @doc "Returns the current FEN as a string."
-  @spec fen(pid()) :: String.t()
-  def fen(pid) do
-    {:ok, fen} = :binbo.get_fen(pid)
-    to_string(fen)
+  def fen(pid), do: GenServer.call(pid, :fen)
+  def side_to_move(pid), do: GenServer.call(pid, :side_to_move)
+  def status(pid), do: GenServer.call(pid, :status)
+  def pieces(pid), do: GenServer.call(pid, :pieces)
+  def legal_moves_from(pid, sq), do: GenServer.call(pid, {:legal_moves_from, sq})
+  def legal_moves(pid), do: GenServer.call(pid, :legal_moves)
+
+  def move(pid, from, to, promotion \\ nil),
+    do: GenServer.call(pid, {:move, from, to, promotion})
+
+  def set_winner(pid, color, reason),
+    do: GenServer.call(pid, {:set_winner, color, reason})
+
+  ## Server callbacks
+
+  @impl true
+  def init(_opts) do
+    case start_binbo() do
+      {:ok, binbo} ->
+        ref = Process.monitor(binbo)
+        {:ok, %{binbo: binbo, monitor: ref, moves: [], winner: nil}}
+
+      {:error, _} = err ->
+        {:stop, err}
+    end
   end
 
-  @doc "Whose turn it is, `:white` or `:black`."
-  @spec side_to_move(pid()) :: color()
-  def side_to_move(pid) do
-    {:ok, color} = :binbo.side_to_move(pid)
-    color
+  @impl true
+  def handle_call(:fen, _from, state) do
+    {:ok, fen} = :binbo.get_fen(state.binbo)
+    {:reply, to_string(fen), state}
   end
 
-  @doc """
-  Attempts to play a move from `from` to `to` (e.g. "e2" -> "e4"),
-  optionally with a promotion piece (`:queen`, `:rook`, `:bishop`,
-  `:knight`). Returns `{:ok, status}` or `{:error, reason}`.
-  """
-  @spec move(pid(), String.t(), String.t(), piece() | nil) ::
-          {:ok, status()} | {:error, term()}
-  def move(pid, from, to, promotion \\ nil) do
-    move_str = from <> to <> promotion_suffix(promotion)
+  def handle_call(:side_to_move, _from, state) do
+    {:ok, color} = :binbo.side_to_move(state.binbo)
+    {:reply, color, state}
+  end
 
-    case :binbo.move(pid, move_str) do
-      {:ok, status} -> {:ok, normalize_status(status)}
+  def handle_call(:status, _from, state) do
+    {:ok, raw} = :binbo.game_status(state.binbo)
+    {:reply, normalize_status(raw), state}
+  end
+
+  def handle_call(:pieces, _from, state) do
+    {:ok, list} = :binbo.get_pieces_list(state.binbo, :notation)
+
+    pieces =
+      Enum.reduce(list, %{}, fn {sq, color, piece}, acc ->
+        Map.put(acc, to_string(sq), {color, piece})
+      end)
+
+    {:reply, pieces, state}
+  end
+
+  def handle_call({:legal_moves_from, from}, _from, state) do
+    moves =
+      state.binbo
+      |> normalized_legal_moves()
+      |> Enum.flat_map(fn
+        {^from, to} -> [to]
+        {^from, to, _promo} -> [to]
+        _ -> []
+      end)
+      |> Enum.uniq()
+
+    {:reply, moves, state}
+  end
+
+  def handle_call(:legal_moves, _from, state) do
+    grouped =
+      state.binbo
+      |> normalized_legal_moves()
+      |> Enum.reduce(%{}, fn
+        {from, to}, acc -> Map.update(acc, from, [to], &[to | &1])
+        {from, to, _promo}, acc -> Map.update(acc, from, [to], &[to | &1])
+      end)
+      |> Map.new(fn {from, tos} -> {from, tos |> Enum.uniq() |> Enum.reverse()} end)
+
+    {:reply, grouped, state}
+  end
+
+  def handle_call({:move, from, to, promo}, _from, state) do
+    case apply_move(state.binbo, from, to, promo) do
+      {:ok, status} ->
+        new_state = %{state | moves: state.moves ++ [{from, to, promo}]}
+        {:reply, {:ok, status}, new_state}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
+    end
+  end
+
+  def handle_call({:set_winner, color, reason}, _from, state) do
+    case :binbo.set_game_winner(state.binbo, color, reason) do
+      :ok -> {:reply, :ok, %{state | winner: {color, reason}}}
+      err -> {:reply, err, state}
+    end
+  end
+
+  @impl true
+  def handle_info({:DOWN, ref, :process, _pid, _reason}, %{monitor: ref} = state) do
+    with {:ok, new_binbo} <- start_binbo(),
+         :ok <- replay_moves(new_binbo, state.moves),
+         :ok <- maybe_restore_winner(new_binbo, state.winner) do
+      new_ref = Process.monitor(new_binbo)
+      {:noreply, %{state | binbo: new_binbo, monitor: new_ref}}
+    else
+      _ -> {:stop, :binbo_reconstruction_failed, state}
+    end
+  end
+
+  ## Private helpers
+
+  defp start_binbo do
+    with {:ok, pid} <- :binbo.new_server(),
+         {:ok, _} <- :binbo.new_game(pid) do
+      {:ok, pid}
+    end
+  end
+
+  defp apply_move(binbo, from, to, promo) do
+    move_str = from <> to <> promotion_suffix(promo)
+
+    case :binbo.move(binbo, move_str) do
+      {:ok, raw} -> {:ok, normalize_status(raw)}
       {:error, reason} -> {:error, reason}
     end
   end
 
-  @doc "Returns the current game status as an Elixir term."
-  @spec status(pid()) :: status()
-  def status(pid) do
-    {:ok, status} = :binbo.game_status(pid)
-    normalize_status(status)
+  defp replay_moves(_binbo, []), do: :ok
+
+  defp replay_moves(binbo, [{from, to, promo} | rest]) do
+    case apply_move(binbo, from, to, promo) do
+      {:ok, _} -> replay_moves(binbo, rest)
+      err -> err
+    end
   end
 
-  @doc """
-  Returns the legal target squares for the piece on `from`, or `[]`
-  if the square is empty / not the side-to-move's piece.
-  """
-  @spec legal_moves_from(pid(), String.t()) :: [String.t()]
-  def legal_moves_from(pid, from) do
-    pid
-    |> normalized_legal_moves()
-    |> Enum.flat_map(fn
-      {^from, to} -> [to]
-      {^from, to, _promo} -> [to]
-      _ -> []
-    end)
-    |> Enum.uniq()
-  end
+  defp maybe_restore_winner(_binbo, nil), do: :ok
 
-  @doc "Map of every legal move grouped by source square."
-  @spec legal_moves(pid()) :: %{String.t() => [String.t()]}
-  def legal_moves(pid) do
-    pid
-    |> normalized_legal_moves()
-    |> Enum.reduce(%{}, fn
-      {from, to}, acc -> Map.update(acc, from, [to], &[to | &1])
-      {from, to, _promo}, acc -> Map.update(acc, from, [to], &[to | &1])
-    end)
-    |> Map.new(fn {from, tos} -> {from, tos |> Enum.uniq() |> Enum.reverse()} end)
-  end
+  defp maybe_restore_winner(binbo, {color, reason}),
+    do: :binbo.set_game_winner(binbo, color, reason)
 
-  defp normalized_legal_moves(pid) do
-    case :binbo.all_legal_moves(pid, :str) do
+  defp normalized_legal_moves(binbo) do
+    case :binbo.all_legal_moves(binbo, :str) do
       {:ok, moves} -> Enum.map(moves, &normalize_move/1)
       {:error, _} -> []
     end
@@ -119,31 +182,6 @@ defmodule Chess.GameEngine do
 
   defp to_str(charlist) when is_list(charlist), do: List.to_string(charlist)
   defp to_str(bin) when is_binary(bin), do: bin
-
-  @doc """
-  Map of every occupied square to its piece, e.g.:
-
-      %{"e1" => {:white, :king}, ...}
-  """
-  @spec pieces(pid()) :: %{String.t() => {color(), piece()}}
-  def pieces(pid) do
-    {:ok, list} = :binbo.get_pieces_list(pid, :notation)
-
-    Enum.reduce(list, %{}, fn {sq, color, piece}, acc ->
-      Map.put(acc, to_string(sq), {color, piece})
-    end)
-  end
-
-  @doc """
-  Force a winner (used when a player resigns). `reason` is opaque metadata
-  attached to the status, e.g. `:resign`.
-  """
-  @spec set_winner(pid(), color(), term()) :: :ok | {:error, term()}
-  def set_winner(pid, color, reason) do
-    :binbo.set_game_winner(pid, color, reason)
-  end
-
-  ## Helpers
 
   defp promotion_suffix(nil), do: ""
   defp promotion_suffix(:queen), do: "q"

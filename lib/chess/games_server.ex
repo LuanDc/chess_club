@@ -1,13 +1,17 @@
 defmodule Chess.GamesServer do
   @moduledoc """
-  OTP facade for live games. Delegates to `Chess.GameServer`
-  processes spawned under `Chess.GameSupervisor` and looked up
-  through `Chess.GameRegistry`.
+  OTP facade for live games. Each game runs as a `Chess.GameInstance`
+  supervision subtree spawned under `Chess.GameSupervisor`. The instance
+  is registered by `room_id` in `Chess.GameInstanceRegistry`; the inner
+  `Chess.GameServer` is registered under the same `room_id` in
+  `Chess.GameRegistry`.
   """
 
+  alias Chess.GameInstance
   alias Chess.GameServer
 
   @registry Chess.GameRegistry
+  @instance_registry Chess.GameInstanceRegistry
   @supervisor Chess.GameSupervisor
 
   @doc """
@@ -16,7 +20,7 @@ defmodule Chess.GamesServer do
       %{room_id: "ABC123", mode: :multiplayer | :solo, white: "Alice", black: "Bob"}
   """
   def start_game(%{room_id: _, mode: _, white: _, black: _} = opts) do
-    DynamicSupervisor.start_child(@supervisor, {GameServer, opts})
+    DynamicSupervisor.start_child(@supervisor, {GameInstance, opts})
   end
 
   def lookup(room_id) do
@@ -38,9 +42,9 @@ defmodule Chess.GamesServer do
   def join(room_id, pid, nickname), do: GameServer.join(room_id, pid, nickname)
 
   def stop(room_id) do
-    case lookup(room_id) do
-      {:ok, pid} -> DynamicSupervisor.terminate_child(@supervisor, pid)
-      err -> err
+    case Registry.lookup(@instance_registry, room_id) do
+      [{pid, _}] -> DynamicSupervisor.terminate_child(@supervisor, pid)
+      [] -> {:error, :not_found}
     end
   end
 end

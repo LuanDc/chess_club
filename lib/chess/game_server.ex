@@ -54,15 +54,21 @@ defmodule Chess.GameServer do
   ## Server callbacks
 
   @impl true
-  def init(%{room_id: room_id, mode: mode, white: white, black: black}) do
-    case GameSession.new(room_id, mode, white, black) do
-      {:ok, session} ->
-        state = %State{session: session, started_at: System.system_time(:second)}
-        {:ok, schedule_shutdown_check(state, join_timeout_ms())}
+  def init(opts), do: {:ok, opts, {:continue, :start_engine}}
 
-      {:error, reason} ->
-        {:stop, reason}
-    end
+  @impl true
+  def handle_continue(:start_engine, %{
+        room_id: room_id,
+        mode: mode,
+        white: white,
+        black: black,
+        instance_sup: instance_sup
+      }) do
+    engine_pid = find_engine(instance_sup)
+    session = GameSession.from_pid(room_id, mode, white, black, engine_pid)
+
+    state = %State{session: session, started_at: System.system_time(:second)}
+    {:noreply, schedule_shutdown_check(state, join_timeout_ms())}
   end
 
   @impl true
@@ -187,13 +193,16 @@ defmodule Chess.GameServer do
     {:noreply, %State{state | shutdown_timer: nil}}
   end
 
-  @impl true
-  def terminate(_reason, %State{session: session}) do
-    GameSession.stop(session)
-    :ok
-  end
-
   ## Helpers
+
+  defp find_engine(instance_sup) do
+    instance_sup
+    |> Supervisor.which_children()
+    |> Enum.find_value(fn
+      {Chess.GameEngine, pid, _, _} when is_pid(pid) -> pid
+      _ -> nil
+    end)
+  end
 
   defp broadcast(%State{session: session}) do
     Phoenix.PubSub.broadcast(
