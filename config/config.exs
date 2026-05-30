@@ -60,7 +60,7 @@ config :logger, :console,
 # Use Jason for JSON parsing in Phoenix
 config :phoenix, :json_library, Jason
 
-config :chess, Chess.GameServer,
+config :chess, Chess.GameSession,
   # Time allowed for a player to resign/surrender a game gracefully
   resign_grace_ms: 5_000,
   # Timeout limit for a player to join an existing game

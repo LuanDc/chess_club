@@ -1,87 +1,307 @@
 defmodule Chess.GameSession do
   @moduledoc """
-  Facade de coordenação para uma sessão de jogo ativa.
+  GenServer que detém uma única partida de xadrez ao vivo.
 
-  Wraps the `{%Chess.Game{}, game_pid}` pair and provides the operations that
-  compose `Chess.Games` (pure rules) and `Chess.GameEngine` (binbo wrapper).
+  Responsibilities: OTP lifecycle, PubSub broadcast, connection tracking,
+  and auto-resign timers. All coordination between domain and engine
+  is delegated to `Chess.GameRules`.
 
-  No OTP, no PubSub, no connection tracking. Every function returns
-  `{:ok, %GameSession{}}` or `{:error, reason}`, making it easy to test in isolation.
+  Registrado em `Chess.GameRegistry` por `room_id`, iniciado sob
+  `Chess.GameSupervisor`.
   """
+  use GenServer, restart: :transient
 
-  alias Chess.GameEngine
-  alias Chess.Games
+  alias Chess.Game
+  alias Chess.GameRules
 
-  @enforce_keys [:game, :game_pid]
-  defstruct [:game, :game_pid]
+  @pubsub Chess.PubSub
 
-  @type t :: %__MODULE__{
-          game: Chess.Game.t(),
-          game_pid: pid()
-        }
+  defmodule State do
+    @enforce_keys [:session]
+    defstruct [
+      :session,
+      started_at: nil,
+      connections: %{},
+      pending_resigns: %{},
+      shutdown_timer: nil
+    ]
+  end
 
-  @spec new(String.t(), :solo | :multiplayer, String.t(), String.t()) ::
-          {:ok, t()} | {:error, term()}
-  def new(room_id, mode, white, black) do
-    with {:ok, game_pid} <- GameEngine.new() do
-      {:ok, %__MODULE__{game: Games.new(room_id, mode, white, black), game_pid: game_pid}}
+  ## Client API
+
+  def start_link(%{room_id: room_id} = opts) do
+    GenServer.start_link(__MODULE__, opts, name: via(room_id))
+  end
+
+  def get_state(room_id), do: GenServer.call(via(room_id), :get_state)
+
+  def legal_moves_from(room_id, square),
+    do: GenServer.call(via(room_id), {:legal_moves_from, square})
+
+  def move(room_id, nickname, from, to, promotion \\ nil),
+    do: GenServer.call(via(room_id), {:move, nickname, from, to, promotion})
+
+  def resign(room_id, nickname),
+    do: GenServer.call(via(room_id), {:resign, nickname})
+
+  def join(room_id, pid, nickname),
+    do: GenServer.call(via(room_id), {:join, pid, nickname})
+
+  def stop(room_id), do: GenServer.stop(via(room_id))
+
+  def via(room_id), do: {:via, Registry, {Chess.GameRegistry, room_id}}
+
+  ## Server callbacks
+
+  @impl true
+  def init(opts), do: {:ok, opts, {:continue, :start_engine}}
+
+  @impl true
+  def handle_continue(:start_engine, %{
+        room_id: room_id,
+        mode: mode,
+        white: white,
+        black: black,
+        instance_sup: instance_sup
+      }) do
+    engine_pid = find_engine(instance_sup)
+    session = GameRules.from_pid(room_id, mode, white, black, engine_pid)
+
+    state = %State{session: session, started_at: System.system_time(:second)}
+    {:noreply, schedule_shutdown_check(state, join_timeout_ms())}
+  end
+
+  @impl true
+  def handle_call(:get_state, _from, state) do
+    {:reply, GameRules.public_state(state.session), state}
+  end
+
+  def handle_call({:legal_moves_from, square}, _from, state) do
+    {:reply, GameRules.legal_moves_from(state.session, square), state}
+  end
+
+  def handle_call({:move, nickname, from, to, promo}, _from, state) do
+    case GameRules.move(state.session, nickname, from, to, promo) do
+      {:ok, new_session} ->
+        new_state = %State{state | session: new_session}
+        broadcast(new_state)
+        {:reply, {:ok, GameRules.public_state(new_session)}, new_state}
+
+      {:error, _} = err ->
+        {:reply, err, state}
     end
   end
 
-  @spec from_pid(String.t(), :solo | :multiplayer, String.t(), String.t(), pid()) :: t()
-  def from_pid(room_id, mode, white, black, game_pid) do
-    %__MODULE__{game: Games.new(room_id, mode, white, black), game_pid: game_pid}
-  end
+  def handle_call(
+        {:resign, nickname},
+        _from,
+        %State{session: %GameRules{game: %Game{mode: :solo}}} = state
+      ) do
+    case GameRules.resign(state.session, nickname) do
+      {:ok, new_session} ->
+        new_state = %State{state | session: new_session}
+        broadcast(new_state)
+        {:reply, {:ok, GameRules.public_state(new_session)}, new_state}
 
-  @spec move(t(), String.t(), String.t(), String.t(), atom() | nil) ::
-          {:ok, t()} | {:error, term()}
-  def move(%__MODULE__{game: g, game_pid: game_pid} = session, nickname, from, to, promo) do
-    with :ok <- Games.ensure_in_progress(g.status),
-         {:ok, _color} <- Games.color_for(g.mode, g.players, nickname),
-         :ok <- Games.ensure_turn_for(g.mode, g.players, g.side_to_move, nickname),
-         {:ok, new_status} <- GameEngine.move(game_pid, from, to, promo) do
-      move_record = %{from: from, to: to, color: g.side_to_move, promotion: promo}
-      new_game = Games.apply_move(g, move_record, new_status, GameEngine.side_to_move(game_pid))
-      {:ok, %__MODULE__{session | game: new_game}}
+      {:error, _} = err ->
+        {:reply, err, state}
     end
   end
 
-  @spec resign(t(), String.t()) :: {:ok, t()} | {:error, term()}
-  def resign(%__MODULE__{game: %Chess.Game{mode: :solo} = g} = session, nickname) do
-    with :ok <- Games.ensure_in_progress(g.status),
-         {:ok, _color} <- Games.color_for(g.mode, g.players, nickname) do
-      {:ok, %__MODULE__{session | game: Games.apply_solo_resign(g)}}
+  def handle_call({:resign, nickname}, _from, state) do
+    case GameRules.resign(state.session, nickname) do
+      {:ok, new_session} ->
+        new_state = %State{state | session: new_session}
+        broadcast(new_state)
+        {:reply, {:ok, GameRules.public_state(new_session)}, new_state}
+
+      {:error, _} = err ->
+        {:reply, err, state}
     end
   end
 
-  def resign(%__MODULE__{game: g, game_pid: game_pid} = session, nickname) do
-    with {:ok, new_game, winner} <- Games.apply_multiplayer_resign(g, nickname),
-         :ok <- GameEngine.set_winner(game_pid, winner, :resign) do
-      {:ok, %__MODULE__{session | game: new_game}}
+  def handle_call({:join, pid, nickname}, _from, state) do
+    if GameRules.player?(state.session, nickname) do
+      was_pending? = Map.has_key?(state.pending_resigns, nickname)
+
+      new_state =
+        state
+        |> register_connection(pid, nickname)
+        |> cancel_pending_resign(nickname)
+        |> cancel_shutdown_timer()
+
+      if was_pending?, do: broadcast_reconnect(new_state, nickname)
+
+      {:reply, :ok, new_state}
+    else
+      {:reply, :ok, state}
     end
   end
 
-  @spec legal_moves_from(t(), String.t()) :: [String.t()]
-  def legal_moves_from(%__MODULE__{game_pid: game_pid}, square),
-    do: GameEngine.legal_moves_from(game_pid, square)
+  @impl true
+  def handle_info({:DOWN, _ref, :process, pid, _reason}, state) do
+    case Map.pop(state.connections, pid) do
+      {nil, _} ->
+        {:noreply, state}
 
-  @spec player?(t(), String.t()) :: boolean()
-  def player?(%__MODULE__{game: g}, nickname),
-    do: match?({:ok, _}, Games.color_for(g.mode, g.players, nickname))
+      {{nickname, _ref}, remaining} ->
+        new_state =
+          %State{state | connections: remaining}
+          |> maybe_schedule_auto_resign(nickname)
+          |> maybe_schedule_shutdown()
 
-  @spec public_state(t()) :: map()
-  def public_state(%__MODULE__{game: g, game_pid: game_pid}) do
-    %{
-      room_id: g.room_id,
-      mode: g.mode,
-      players: g.players,
-      side_to_move: g.side_to_move,
-      status: g.status,
-      history: g.history,
-      fen: GameEngine.fen(game_pid)
-    }
+        {:noreply, new_state}
+    end
   end
 
-  @spec stop(t()) :: :ok
-  def stop(%__MODULE__{game_pid: game_pid}), do: GameEngine.stop(game_pid)
+  def handle_info({:auto_resign, nickname}, state) do
+    new_state = %State{state | pending_resigns: Map.delete(state.pending_resigns, nickname)}
+    g = new_state.session.game
+
+    resolved =
+      cond do
+        g.status != :in_progress ->
+          new_state
+
+        g.mode == :solo ->
+          new_state
+
+        reconnected?(new_state, nickname) ->
+          new_state
+
+        true ->
+          case GameRules.resign(new_state.session, nickname) do
+            {:ok, new_session} ->
+              resigned_state = %State{new_state | session: new_session}
+              broadcast(resigned_state)
+              resigned_state
+
+            {:error, _} ->
+              new_state
+          end
+      end
+
+    {:noreply, maybe_schedule_shutdown(resolved)}
+  end
+
+  def handle_info(:shutdown_check, %State{connections: connections} = state)
+      when map_size(connections) == 0 do
+    {:stop, :normal, state}
+  end
+
+  def handle_info(:shutdown_check, state) do
+    {:noreply, %State{state | shutdown_timer: nil}}
+  end
+
+  ## Helpers
+
+  defp find_engine(instance_sup) do
+    instance_sup
+    |> Supervisor.which_children()
+    |> Enum.find_value(fn
+      {Chess.GameEngine, pid, _, _} when is_pid(pid) -> pid
+      _ -> nil
+    end)
+  end
+
+  defp broadcast(%State{session: session}) do
+    Phoenix.PubSub.broadcast(
+      @pubsub,
+      "game:" <> session.game.room_id,
+      {:game_state, GameRules.public_state(session)}
+    )
+  end
+
+  defp register_connection(state, pid, nickname) do
+    if Map.has_key?(state.connections, pid) do
+      state
+    else
+      ref = Process.monitor(pid)
+      %State{state | connections: Map.put(state.connections, pid, {nickname, ref})}
+    end
+  end
+
+  defp cancel_pending_resign(state, nickname) do
+    case Map.pop(state.pending_resigns, nickname) do
+      {nil, _} ->
+        state
+
+      {timer_ref, remaining} ->
+        Process.cancel_timer(timer_ref)
+        %State{state | pending_resigns: remaining}
+    end
+  end
+
+  defp maybe_schedule_auto_resign(
+         %State{session: %GameRules{game: %Game{mode: :solo}}} = state,
+         _nickname
+       ),
+       do: state
+
+  defp maybe_schedule_auto_resign(
+         %State{session: %GameRules{game: %Game{status: status}}} = state,
+         _nickname
+       )
+       when status != :in_progress,
+       do: state
+
+  defp maybe_schedule_auto_resign(state, nickname) do
+    if has_other_connection?(state, nickname) do
+      state
+    else
+      state = cancel_pending_resign(state, nickname)
+      grace = grace_ms()
+      timer_ref = Process.send_after(self(), {:auto_resign, nickname}, grace)
+      deadline_ms = System.system_time(:millisecond) + grace
+      broadcast_disconnect(state, nickname, deadline_ms)
+      %State{state | pending_resigns: Map.put(state.pending_resigns, nickname, timer_ref)}
+    end
+  end
+
+  defp broadcast_disconnect(%State{session: session}, nickname, deadline_ms) do
+    Phoenix.PubSub.broadcast(
+      @pubsub,
+      "game:" <> session.game.room_id,
+      {:opponent_disconnected, nickname, deadline_ms}
+    )
+  end
+
+  defp broadcast_reconnect(%State{session: session}, nickname) do
+    Phoenix.PubSub.broadcast(
+      @pubsub,
+      "game:" <> session.game.room_id,
+      {:opponent_reconnected, nickname}
+    )
+  end
+
+  defp reconnected?(state, nickname), do: has_other_connection?(state, nickname)
+
+  defp has_other_connection?(state, nickname) do
+    Enum.any?(state.connections, fn {_pid, {nick, _ref}} -> nick == nickname end)
+  end
+
+  defp grace_ms, do: Application.get_env(:chess, Chess.GameSession, [])[:resign_grace_ms]
+  defp join_timeout_ms, do: Application.get_env(:chess, Chess.GameSession, [])[:join_timeout_ms]
+
+  defp shutdown_grace_ms,
+    do: Application.get_env(:chess, Chess.GameSession, [])[:shutdown_grace_ms]
+
+  defp maybe_schedule_shutdown(%State{connections: connections} = state)
+       when map_size(connections) == 0 do
+    schedule_shutdown_check(cancel_shutdown_timer(state), shutdown_grace_ms())
+  end
+
+  defp maybe_schedule_shutdown(state), do: state
+
+  defp schedule_shutdown_check(state, grace_ms) do
+    timer_ref = Process.send_after(self(), :shutdown_check, grace_ms)
+    %State{state | shutdown_timer: timer_ref}
+  end
+
+  defp cancel_shutdown_timer(%State{shutdown_timer: nil} = state), do: state
+
+  defp cancel_shutdown_timer(%State{shutdown_timer: ref} = state) do
+    Process.cancel_timer(ref)
+    %State{state | shutdown_timer: nil}
+  end
 end

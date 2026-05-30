@@ -1,164 +1,462 @@
 defmodule Chess.GameSessionTest do
   use ExUnit.Case, async: true
 
-  alias Chess.GameSession
+  alias Chess.Games
 
-  defp new_multiplayer do
-    {:ok, session} = GameSession.new("room-multi", :multiplayer, "Alice", "Bob")
-    on_exit(fn -> GameSession.stop(session) end)
-    session
+  defp unique_room_id, do: "T-#{System.unique_integer([:positive])}"
+
+  defp spawn_player, do: spawn(fn -> Process.sleep(:infinity) end)
+
+  defp put_env(key, value) do
+    previous = Application.get_env(:chess, Chess.GameSession, [])
+    config = previous || []
+    Application.put_env(:chess, Chess.GameSession, Keyword.put(config, key, value))
+    on_exit(fn -> Application.put_env(:chess, Chess.GameSession, previous) end)
   end
 
-  defp new_solo do
-    {:ok, session} = GameSession.new("room-solo", :solo, "Alice", "Alice")
-    on_exit(fn -> GameSession.stop(session) end)
-    session
+  defp start_game(opts \\ []) do
+    room_id = Keyword.get_lazy(opts, :room_id, &unique_room_id/0)
+    white = Keyword.get(opts, :white, "Alice")
+    black = Keyword.get(opts, :black, "Bob")
+    mode = Keyword.get(opts, :mode, :multiplayer)
+
+    {:ok, _pid} =
+      Games.start_game(%{
+        room_id: room_id,
+        mode: mode,
+        white: white,
+        black: black
+      })
+
+    Phoenix.PubSub.subscribe(Chess.PubSub, "game:#{room_id}")
+
+    on_exit(fn -> cleanup_game(room_id) end)
+
+    %{room_id: room_id, white: white, black: black}
   end
 
-  describe "new/4" do
-    test "returns a session with a live game_pid" do
-      {:ok, session} = GameSession.new("r", :multiplayer, "A", "B")
-      assert is_pid(session.game_pid)
-      assert Process.alive?(session.game_pid)
-      GameSession.stop(session)
+  defp cleanup_game(room_id), do: Games.stop(room_id)
+
+  describe "start_game/1" do
+    test "starts a game registered under room_id" do
+      %{room_id: room_id, white: white, black: black} = start_game()
+
+      assert {:ok, pid} = Games.lookup(room_id)
+      assert is_pid(pid)
+
+      state = Games.get_state(room_id)
+      assert state.room_id == room_id
+      assert state.players.white == white
+      assert state.players.black == black
+      assert state.status == :in_progress
+      assert state.history == []
+      assert state.side_to_move == :white
     end
 
-    test "initial status is :in_progress" do
-      {:ok, session} = GameSession.new("r", :multiplayer, "A", "B")
-      assert session.game.status == :in_progress
-      GameSession.stop(session)
-    end
-  end
+    test "refuses to start two games with the same room_id" do
+      room_id = unique_room_id()
+      {:ok, _} = Games.start_game(%{room_id: room_id, mode: :multiplayer, white: "A", black: "B"})
 
-  describe "move/5" do
-    test "valid move returns an updated session" do
-      session = new_multiplayer()
-      assert {:ok, updated} = GameSession.move(session, "Alice", "e2", "e4", nil)
-      assert updated.game.side_to_move == :black
-      assert [%{from: "e2", to: "e4"}] = updated.game.history
-    end
-
-    test "wrong player returns :not_your_turn" do
-      session = new_multiplayer()
-      assert {:error, :not_your_turn} = GameSession.move(session, "Bob", "e7", "e5", nil)
-    end
-
-    test "non-player returns :not_a_player" do
-      session = new_multiplayer()
-      assert {:error, :not_a_player} = GameSession.move(session, "Mallory", "e2", "e4", nil)
-    end
-
-    test "illegal move returns an engine error" do
-      session = new_multiplayer()
-      assert {:error, _} = GameSession.move(session, "Alice", "e2", "e5", nil)
-    end
-
-    test "move on a finished game returns :game_over" do
-      session = new_multiplayer()
-      # fool's mate
-      {:ok, s1} = GameSession.move(session, "Alice", "f2", "f3", nil)
-      {:ok, s2} = GameSession.move(s1, "Bob", "e7", "e5", nil)
-      {:ok, s3} = GameSession.move(s2, "Alice", "g2", "g4", nil)
-      {:ok, s4} = GameSession.move(s3, "Bob", "d8", "h4", nil)
-      assert s4.game.status != :in_progress
-      assert {:error, :game_over} = GameSession.move(s4, "Alice", "a2", "a3", nil)
+      assert {:error, _} =
+               Games.start_game(%{room_id: room_id, mode: :multiplayer, white: "A", black: "B"})
     end
   end
 
-  describe "resign/2 — solo" do
-    test "ends the game with status :ended" do
-      session = new_solo()
-      assert {:ok, updated} = GameSession.resign(session, "Alice")
-      assert updated.game.status == :ended
+  describe "move/4 (multiplayer)" do
+    test "white can move on the first turn" do
+      %{room_id: room_id} = start_game()
+      assert {:ok, state} = Games.move(room_id, "Alice", "e2", "e4")
+      assert state.side_to_move == :black
+      assert [%{from: "e2", to: "e4", color: :white}] = state.history
+    end
+
+    test "black cannot move first" do
+      %{room_id: room_id} = start_game()
+      assert {:error, :not_your_turn} = Games.move(room_id, "Bob", "e7", "e5")
+    end
+
+    test "non-player cannot move" do
+      %{room_id: room_id} = start_game()
+      assert {:error, :not_a_player} = Games.move(room_id, "Mallory", "e2", "e4")
+    end
+
+    test "rejects illegal moves" do
+      %{room_id: room_id} = start_game()
+      assert {:error, _reason} = Games.move(room_id, "Alice", "e2", "e5")
+    end
+
+    test "broadcasts :game_state on success" do
+      %{room_id: room_id} = start_game()
+      {:ok, _state} = Games.move(room_id, "Alice", "e2", "e4")
+      assert_receive {:game_state, %{side_to_move: :black, history: [_]}}
+    end
+
+    test "does not broadcast on a rejected move" do
+      %{room_id: room_id} = start_game()
+      {:error, _} = Games.move(room_id, "Alice", "e2", "e5")
+      refute_receive {:game_state, _}, 50
+    end
+
+    test "rejects move when game is over" do
+      %{room_id: room_id} = start_game()
+      {:ok, _} = Games.move(room_id, "Alice", "f2", "f3")
+      {:ok, _} = Games.move(room_id, "Bob", "e7", "e5")
+      {:ok, _} = Games.move(room_id, "Alice", "g2", "g4")
+      {:ok, state} = Games.move(room_id, "Bob", "d8", "h4")
+      assert state.status == {:checkmate, :black_wins}
+
+      assert {:error, :game_over} = Games.move(room_id, "Alice", "a2", "a3")
+    end
+  end
+
+  describe "resign/2 (multiplayer)" do
+    test "white resigning makes black the winner" do
+      %{room_id: room_id} = start_game()
+      assert {:ok, state} = Games.resign(room_id, "Alice")
+      assert match?({:winner, :black, :resign}, state.status)
+    end
+
+    test "broadcasts state after resign" do
+      %{room_id: room_id} = start_game()
+      {:ok, _} = Games.resign(room_id, "Bob")
+      assert_receive {:game_state, %{status: {:winner, :white, :resign}}}
     end
 
     test "non-player cannot resign" do
-      session = new_solo()
-      assert {:error, :not_a_player} = GameSession.resign(session, "Mallory")
-    end
-
-    test "cannot resign an already finished game" do
-      session = new_solo()
-      {:ok, ended} = GameSession.resign(session, "Alice")
-      assert {:error, :game_over} = GameSession.resign(ended, "Alice")
+      %{room_id: room_id} = start_game()
+      assert {:error, :not_a_player} = Games.resign(room_id, "Mallory")
     end
   end
 
-  describe "resign/2 — multiplayer" do
-    test "white resigning declares black the winner" do
-      session = new_multiplayer()
-      assert {:ok, updated} = GameSession.resign(session, "Alice")
-      assert match?({:winner, :black, :resign}, updated.game.status)
+  describe "solo mode" do
+    test "single player can move both sides" do
+      %{room_id: room_id} = start_game(mode: :solo, white: "Alice", black: "Alice")
+
+      {:ok, state1} = Games.move(room_id, "Alice", "e2", "e4")
+      assert state1.side_to_move == :black
+
+      {:ok, state2} = Games.move(room_id, "Alice", "e7", "e5")
+      assert state2.side_to_move == :white
     end
 
-    test "black resigning declares white the winner" do
-      session = new_multiplayer()
-      assert {:ok, updated} = GameSession.resign(session, "Bob")
-      assert match?({:winner, :white, :resign}, updated.game.status)
-    end
-
-    test "non-player cannot resign" do
-      session = new_multiplayer()
-      assert {:error, :not_a_player} = GameSession.resign(session, "Mallory")
-    end
-  end
-
-  describe "legal_moves_from/2" do
-    test "returns legal target squares for a piece" do
-      session = new_multiplayer()
-      moves = GameSession.legal_moves_from(session, "e2")
-      assert "e4" in moves
-      assert "e3" in moves
-    end
-
-    test "returns [] for an empty square" do
-      session = new_multiplayer()
-      assert [] == GameSession.legal_moves_from(session, "e4")
+    test "resign in solo ends the game without picking a winner" do
+      %{room_id: room_id} = start_game(mode: :solo, white: "Alice", black: "Alice")
+      assert {:ok, state} = Games.resign(room_id, "Alice")
+      assert state.status == :ended
     end
   end
 
-  describe "player?/2" do
-    test "registered player returns true" do
-      session = new_multiplayer()
-      assert GameSession.player?(session, "Alice")
-      assert GameSession.player?(session, "Bob")
+  describe "auto-resign on disconnect" do
+    test "DOWN of multiplayer player triggers resign" do
+      %{room_id: room_id} = start_game()
+      pid = spawn_player()
+      :ok = Games.join(room_id, pid, "Alice")
+
+      Process.exit(pid, :kill)
+      assert_receive {:game_state, %{status: {:winner, :black, :resign}}}, 200
     end
 
-    test "unknown nickname returns false" do
-      session = new_multiplayer()
-      refute GameSession.player?(session, "Mallory")
+    test "broadcasts :opponent_disconnected with deadline when player disconnects" do
+      %{room_id: room_id} = start_game()
+      pid = spawn_player()
+      :ok = Games.join(room_id, pid, "Alice")
+
+      before_ms = System.system_time(:millisecond)
+      Process.exit(pid, :kill)
+      assert_receive {:opponent_disconnected, "Alice", deadline_ms}, 200
+      assert is_integer(deadline_ms)
+      assert deadline_ms >= before_ms
+    end
+
+    test "does not broadcast :opponent_disconnected in solo mode" do
+      %{room_id: room_id} = start_game(mode: :solo, white: "Alice", black: "Alice")
+      pid = spawn_player()
+      :ok = Games.join(room_id, pid, "Alice")
+
+      Process.exit(pid, :kill)
+      refute_receive {:opponent_disconnected, _, _}, 50
+    end
+
+    test "does not broadcast :opponent_disconnected when player has another tab alive" do
+      %{room_id: room_id} = start_game()
+      pid1 = spawn_player()
+      pid2 = spawn_player()
+      :ok = Games.join(room_id, pid1, "Alice")
+      :ok = Games.join(room_id, pid2, "Alice")
+
+      Process.exit(pid1, :kill)
+      refute_receive {:opponent_disconnected, _, _}, 50
+    end
+
+    test "reconnect within grace cancels auto-resign" do
+      previous = Application.get_env(:chess, Chess.GameSession, [])
+
+      Application.put_env(
+        :chess,
+        Chess.GameSession,
+        Keyword.put(previous || [], :resign_grace_ms, 100)
+      )
+
+      on_exit(fn -> Application.put_env(:chess, Chess.GameSession, previous) end)
+
+      %{room_id: room_id} = start_game()
+      pid1 = spawn_player()
+      :ok = Games.join(room_id, pid1, "Alice")
+
+      Process.exit(pid1, :kill)
+      Process.sleep(20)
+
+      pid2 = spawn_player()
+      :ok = Games.join(room_id, pid2, "Alice")
+
+      refute_receive {:game_state, %{status: {:winner, _, _}}}, 200
+    end
+
+    test "broadcasts :opponent_reconnected when player rejoins within grace" do
+      previous = Application.get_env(:chess, Chess.GameSession, [])
+
+      Application.put_env(
+        :chess,
+        Chess.GameSession,
+        Keyword.put(previous || [], :resign_grace_ms, 500)
+      )
+
+      on_exit(fn -> Application.put_env(:chess, Chess.GameSession, previous) end)
+
+      %{room_id: room_id} = start_game()
+      pid1 = spawn_player()
+      :ok = Games.join(room_id, pid1, "Alice")
+
+      Process.exit(pid1, :kill)
+      assert_receive {:opponent_disconnected, "Alice", _deadline_ms}, 200
+
+      pid2 = spawn_player()
+      :ok = Games.join(room_id, pid2, "Alice")
+      assert_receive {:opponent_reconnected, "Alice"}, 200
+    end
+
+    test "does not broadcast :opponent_reconnected on initial join" do
+      %{room_id: room_id} = start_game()
+      pid = spawn_player()
+      :ok = Games.join(room_id, pid, "Alice")
+
+      refute_receive {:opponent_reconnected, _}, 50
+    end
+
+    test "DOWN of solo player does not resign" do
+      %{room_id: room_id} = start_game(mode: :solo, white: "Alice", black: "Alice")
+      pid = spawn_player()
+      :ok = Games.join(room_id, pid, "Alice")
+
+      Process.exit(pid, :kill)
+      refute_receive {:game_state, _}, 50
+    end
+
+    test "DOWN of one tab when player has two does not resign" do
+      %{room_id: room_id} = start_game()
+      pid1 = spawn_player()
+      pid2 = spawn_player()
+      :ok = Games.join(room_id, pid1, "Alice")
+      :ok = Games.join(room_id, pid2, "Alice")
+
+      Process.exit(pid1, :kill)
+      refute_receive {:game_state, _}, 50
+
+      Process.exit(pid2, :kill)
+      assert_receive {:game_state, %{status: {:winner, :black, :resign}}}, 200
+    end
+
+    test "DOWN of non-player pid is ignored" do
+      %{room_id: room_id} = start_game()
+      pid = spawn_player()
+      :ok = Games.join(room_id, pid, "Mallory")
+
+      Process.exit(pid, :kill)
+      refute_receive {:game_state, _}, 50
+    end
+
+    test "DOWN after manual resign is no-op" do
+      %{room_id: room_id} = start_game()
+      pid = spawn_player()
+      :ok = Games.join(room_id, pid, "Alice")
+
+      {:ok, _} = Games.resign(room_id, "Alice")
+      assert_receive {:game_state, %{status: {:winner, :black, :resign}}}
+
+      Process.exit(pid, :kill)
+      refute_receive {:game_state, _}, 50
     end
   end
 
-  describe "public_state/1" do
-    test "includes all expected keys" do
-      session = new_multiplayer()
-      state = GameSession.public_state(session)
+  describe "auto-shutdown" do
+    test "shuts down after join_timeout_ms when no player ever joins" do
+      put_env(:join_timeout_ms, 50)
+      %{room_id: room_id} = start_game()
+      {:ok, pid} = Games.lookup(room_id)
+      ref = Process.monitor(pid)
 
-      assert Map.has_key?(state, :room_id)
-      assert Map.has_key?(state, :mode)
-      assert Map.has_key?(state, :players)
-      assert Map.has_key?(state, :side_to_move)
-      assert Map.has_key?(state, :status)
-      assert Map.has_key?(state, :history)
-      assert Map.has_key?(state, :fen)
-      assert is_binary(state.fen)
+      assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 500
+    end
+
+    test "shuts down after both players disconnect from a finished game" do
+      put_env(:shutdown_grace_ms, 50)
+      %{room_id: room_id} = start_game()
+      {:ok, game_pid} = Games.lookup(room_id)
+      ref = Process.monitor(game_pid)
+
+      pid1 = spawn_player()
+      pid2 = spawn_player()
+      :ok = Games.join(room_id, pid1, "Alice")
+      :ok = Games.join(room_id, pid2, "Bob")
+
+      {:ok, _} = Games.resign(room_id, "Alice")
+      assert_receive {:game_state, %{status: {:winner, :black, :resign}}}
+
+      Process.exit(pid1, :kill)
+      Process.exit(pid2, :kill)
+
+      assert_receive {:DOWN, ^ref, :process, ^game_pid, :normal}, 500
+    end
+
+    test "shuts down after auto-resign drains the last connection" do
+      put_env(:shutdown_grace_ms, 50)
+      %{room_id: room_id} = start_game()
+      {:ok, game_pid} = Games.lookup(room_id)
+      ref = Process.monitor(game_pid)
+
+      pid = spawn_player()
+      :ok = Games.join(room_id, pid, "Alice")
+
+      Process.exit(pid, :kill)
+
+      assert_receive {:game_state, %{status: {:winner, :black, :resign}}}, 200
+      assert_receive {:DOWN, ^ref, :process, ^game_pid, :normal}, 500
+    end
+
+    test "shuts down after solo player disconnects" do
+      put_env(:shutdown_grace_ms, 50)
+      %{room_id: room_id} = start_game(mode: :solo, white: "Alice", black: "Alice")
+      {:ok, game_pid} = Games.lookup(room_id)
+      ref = Process.monitor(game_pid)
+
+      pid = spawn_player()
+      :ok = Games.join(room_id, pid, "Alice")
+
+      Process.exit(pid, :kill)
+
+      refute_receive {:game_state, _}, 30
+      assert_receive {:DOWN, ^ref, :process, ^game_pid, :normal}, 500
+    end
+
+    test "reconnect within shutdown grace keeps the process alive" do
+      put_env(:shutdown_grace_ms, 100)
+      %{room_id: room_id} = start_game()
+      {:ok, game_pid} = Games.lookup(room_id)
+      ref = Process.monitor(game_pid)
+
+      pid1 = spawn_player()
+      :ok = Games.join(room_id, pid1, "Alice")
+
+      Process.exit(pid1, :kill)
+      Process.sleep(20)
+
+      pid2 = spawn_player()
+      :ok = Games.join(room_id, pid2, "Alice")
+
+      refute_receive {:DOWN, ^ref, :process, ^game_pid, _}, 300
+    end
+
+    test "joining within join_timeout cancels the init shutdown timer" do
+      put_env(:join_timeout_ms, 50)
+      %{room_id: room_id} = start_game()
+      {:ok, game_pid} = Games.lookup(room_id)
+      ref = Process.monitor(game_pid)
+
+      pid = spawn_player()
+      :ok = Games.join(room_id, pid, "Alice")
+
+      refute_receive {:DOWN, ^ref, :process, ^game_pid, _}, 200
     end
   end
 
-  describe "from_pid/5" do
-    test "builds a session bound to a pre-started engine pid" do
-      {:ok, engine_pid} = Chess.GameEngine.new()
-      on_exit(fn -> Chess.GameEngine.stop(engine_pid) end)
+  describe "Binbo crash recovery" do
+    defp engine_pid(room_id) do
+      :sys.get_state(Chess.GameSession.via(room_id)).session.game_pid
+    end
 
-      session = GameSession.from_pid("r", :multiplayer, "Alice", "Bob", engine_pid)
+    defp binbo_pid(room_id) do
+      :sys.get_state(engine_pid(room_id)).binbo
+    end
 
-      assert session.game_pid == engine_pid
-      assert session.game.room_id == "r"
-      assert session.game.mode == :multiplayer
-      assert session.game.players == %{white: "Alice", black: "Bob"}
-      assert session.game.status == :in_progress
-      assert session.game.history == []
+    test "binbo crash is invisible to subscribers (no broadcast)" do
+      %{room_id: room_id} = start_game()
+      {:ok, _} = Games.move(room_id, "Alice", "e2", "e4")
+      assert_receive {:game_state, _}
+
+      :erlang.exit(binbo_pid(room_id), :kill)
+
+      refute_receive {:game_state, _}, 200
+    end
+
+    test "game remains playable after binbo crash" do
+      %{room_id: room_id} = start_game()
+      {:ok, _} = Games.move(room_id, "Alice", "e2", "e4")
+      assert_receive {:game_state, _}
+
+      :erlang.exit(binbo_pid(room_id), :kill)
+      # synchronize: this call only returns after the engine's :DOWN is handled
+      :sys.get_state(engine_pid(room_id))
+
+      assert {:ok, state} = Games.move(room_id, "Bob", "e7", "e5")
+      assert length(state.history) == 2
+    end
+
+    test "FEN is consistent across the crash boundary" do
+      %{room_id: room_id} = start_game()
+      {:ok, before} = Games.move(room_id, "Alice", "e2", "e4")
+      assert_receive {:game_state, _}
+
+      :erlang.exit(binbo_pid(room_id), :kill)
+      :sys.get_state(engine_pid(room_id))
+
+      assert Games.get_state(room_id).fen == before.fen
+    end
+
+    test "underlying binbo pid changes; GameEngine pid stays stable" do
+      %{room_id: room_id} = start_game()
+      original_engine = engine_pid(room_id)
+      original_binbo = binbo_pid(room_id)
+
+      :erlang.exit(original_binbo, :kill)
+      :sys.get_state(original_engine)
+
+      assert engine_pid(room_id) == original_engine
+      assert binbo_pid(room_id) != original_binbo
+      assert Process.alive?(binbo_pid(room_id))
+    end
+
+    test "GameServer survives binbo crash without cascading" do
+      put_env(:join_timeout_ms, 5_000)
+      %{room_id: room_id} = start_game()
+      {:ok, gs_pid} = Games.lookup(room_id)
+      ref = Process.monitor(gs_pid)
+
+      :erlang.exit(binbo_pid(room_id), :kill)
+
+      refute_receive {:DOWN, ^ref, :process, _, _}, 300
+    end
+
+    test "preserves resignation-ended status across binbo crash" do
+      %{room_id: room_id} = start_game()
+      {:ok, _} = Games.move(room_id, "Alice", "e2", "e4")
+      assert_receive {:game_state, _}
+      {:ok, _} = Games.resign(room_id, "Alice")
+      assert_receive {:game_state, _}
+
+      :erlang.exit(binbo_pid(room_id), :kill)
+      :sys.get_state(engine_pid(room_id))
+
+      assert Games.get_state(room_id).status == {:winner, :black, :resign}
     end
   end
 end

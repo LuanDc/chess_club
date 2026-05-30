@@ -3,11 +3,11 @@ defmodule Chess.Games do
   Phoenix context for chess games.
 
   Pure business rule functions + public API that delegates to
-  Chess.GamesServer for process-involving operations.
+  Chess.GameSessions for process-involving operations.
   """
 
   alias Chess.Game
-  alias Chess.GamesServer
+  alias Chess.GameSessions
 
   ## Constructor
 
@@ -74,13 +74,13 @@ defmodule Chess.Games do
 
   ## Public API (delegates to the OTP layer)
 
-  defdelegate start_game(opts), to: GamesServer
-  defdelegate lookup(room_id), to: GamesServer
-  defdelegate get_state(room_id), to: GamesServer
-  defdelegate legal_moves_from(room_id, square), to: GamesServer
-  defdelegate move(room_id, nickname, from, to), to: GamesServer
-  defdelegate move(room_id, nickname, from, to, promotion), to: GamesServer
-  defdelegate resign(room_id, nickname), to: GamesServer
-  defdelegate join(room_id, pid, nickname), to: GamesServer
-  defdelegate stop(room_id), to: GamesServer
+  defdelegate start_game(opts), to: GameSessions
+  defdelegate lookup(room_id), to: GameSessions
+  defdelegate get_state(room_id), to: GameSessions
+  defdelegate legal_moves_from(room_id, square), to: GameSessions
+  defdelegate move(room_id, nickname, from, to), to: GameSessions
+  defdelegate move(room_id, nickname, from, to, promotion), to: GameSessions
+  defdelegate resign(room_id, nickname), to: GameSessions
+  defdelegate join(room_id, pid, nickname), to: GameSessions
+  defdelegate stop(room_id), to: GameSessions
 end
